@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Design System Reference
+
+- The app uses a dark-first design system, with color tokens and component conventions defined in [Design_System.md](mdc:../../Design_System.md).
+- Key color tokens: bg/900, bg/800, border/600, text/100, brand/500, state/success, state/error, etc.
+- Typography uses the Inter font family, with clear hierarchy for headings, body, and captions.
+- Components use consistent radii, spacing, and shadow levels as described in the design system.
+- Buttons, inputs, and calendar dropdowns follow the interaction and accessibility guidelines in the design system.

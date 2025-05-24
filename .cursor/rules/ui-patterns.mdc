@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# UI Patterns & Interaction Guide
+
+- The main to-do list UI and logic are in [src/app/page.tsx](mdc:src/app/page.tsx).
+- Task creation and editing use a unified form layout with a checkbox, title textarea, description textarea, and a custom calendar dropdown for due dates.
+- The calendar dropdown is implemented in the same file and uses a glassmorphism effect for its background.
+- Toast notifications are handled by [src/app/components/Toast.tsx](mdc:src/app/components/Toast.tsx).
+- All UI is styled using Tailwind CSS tokens and follows the design system described in the project documentation.

@@ -1,0 +1,13 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Project Structure Guide
+
+- The main entry point for the app is [src/app/page.tsx](mdc:src/app/page.tsx), which contains the core UI and logic for the to-do list.
+- Shared UI components (e.g., Toast) are in [src/app/components/](mdc:src/app/components).
+- Global styles are defined in [src/app/globals.css](mdc:src/app/globals.css).
+- The layout and font setup is in [src/app/layout.tsx](mdc:src/app/layout.tsx).
+- Project configuration files include [package.json](mdc:package.json), [tailwind.config.js](mdc:tailwind.config.js), and [tsconfig.json](mdc:tsconfig.json).
+- The app uses [Next.js](mdc:https:/nextjs.org) with the App Router and is styled with Tailwind CSS.

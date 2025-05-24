@@ -2,35 +2,12 @@
 import { useEffect, useRef, useState, RefObject } from "react";
 import Toast, { ToastType } from "./components/Toast";
 import { Trash2, GripVertical, CheckCircle2 } from "lucide-react";
-
-// Task type
-interface Task {
-  id: string;
-  title: string;
-  completed: boolean;
-  createdAt: number;
-  notes?: string;
-  dueDate?: string; // ISO string
-}
+import AuthForm from "./components/AuthForm";
+import { auth } from "./firebase";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { loadUserTasks, addUserTask, updateUserTask, deleteUserTask, toggleUserTask, Task } from "./lib/firestore";
 
 type Filter = "all" | "active" | "completed";
-
-const TASKS_KEY = "todo-list-tasks";
-
-function loadTasks(): Task[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const data = localStorage.getItem(TASKS_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveTasks(tasks: Task[]) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
-}
 
 // Calendar helpers
 function getDaysInMonth(year: number, month: number) {
@@ -98,9 +75,9 @@ function CalendarDropdown({ value, onChange, onClose }: { value?: string, onChan
   return (
     <div ref={ref} className="absolute z-50 mt-2 border border-border-600 rounded-lg shadow-2 p-4 backdrop-blur bg-[rgba(20,23,32,0.85)]" style={{minWidth: 260}}>
       <div className="flex justify-between items-center mb-2">
-        <button className="text-text-200 hover:text-text-100 px-2" onClick={prevMonth}>&lt;</button>
+        <button className="text-text-200 hover:text-text-100 active:text-text-100 hover:bg-bg-800 active:bg-bg-700 px-2 py-1 rounded transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]" onClick={prevMonth}>&lt;</button>
         <span className="text-text-100 font-medium">{new Date(year, month).toLocaleString(undefined, { month: 'long', year: 'numeric' })}</span>
-        <button className="text-text-200 hover:text-text-100 px-2" onClick={nextMonth}>&gt;</button>
+        <button className="text-text-200 hover:text-text-100 active:text-text-100 hover:bg-bg-800 active:bg-bg-700 px-2 py-1 rounded transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]" onClick={nextMonth}>&gt;</button>
       </div>
       <div className="grid grid-cols-7 gap-1 text-center text-text-200 text-sm mb-1">
         {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d => <div key={d}>{d}</div>)}
@@ -113,8 +90,8 @@ function CalendarDropdown({ value, onChange, onClose }: { value?: string, onChan
           return (
             <button
               key={i+1}
-              className={`rounded-md w-8 h-8 flex items-center justify-center transition-colors ${isSelected ? 'bg-brand-500 text-bg-900' : isToday(d) ? 'border border-brand-500 text-brand-500' : 'hover:bg-bg-700 text-text-100'}`}
-              onClick={() => { onChange(d.toISOString().slice(0,10)); setTimeout(onClose, 0); }}
+              className={`rounded-md w-8 h-8 flex items-center justify-center transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${isSelected ? 'bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700' : isToday(d) ? 'border border-brand-500 text-brand-500 hover:bg-bg-700 active:bg-bg-600' : 'hover:bg-bg-700 active:bg-bg-600 text-text-100'}`}
+              onClick={() => onChange(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)}
             >{i+1}</button>
           );
         })}
@@ -132,50 +109,171 @@ export default function HomePage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [noteInput, setNoteInput] = useState("");
-  const [dueDateInput, setDueDateInput] = useState("");
   const [editNote, setEditNote] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
   const dateInputRef = useRef<HTMLInputElement>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [showEditCalendarId, setShowEditCalendar] = useState<string | null>(null);
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [dueDateInput, setDueDateInput] = useState("");
 
-  // Load tasks from localStorage on mount
+  // Track authentication state
   useEffect(() => {
-    setTasks(loadTasks());
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+      if (firebaseUser) {
+        loadTasks(firebaseUser.uid);
+      } else {
+        setTasks([]);
+        setTasksLoading(false);
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
-  // Save tasks to localStorage on change
-  useEffect(() => {
-    saveTasks(tasks);
-  }, [tasks]);
+  // Load tasks from Firestore
+  async function loadTasks(userId: string) {
+    setTasksLoading(true);
+    try {
+      const userTasks = await loadUserTasks(userId);
+      setTasks(userTasks);
+    } catch (error) {
+      setToast({ open: true, message: "Failed to load tasks", type: "error" });
+    } finally {
+      setTasksLoading(false);
+    }
+  }
 
   // Add a new task
-  function addTask(e: React.FormEvent) {
+  async function addTask(e: React.FormEvent) {
     e.preventDefault();
     const title = input.trim();
-    if (!title) return;
-    setTasks([
-      { id: crypto.randomUUID(), title, completed: false, createdAt: Date.now(), notes: noteInput.trim(), dueDate: dueDateInput || undefined },
-      ...tasks,
-    ]);
-    setInput("");
-    setNoteInput("");
-    setDueDateInput("");
-    inputRef.current?.focus();
-    setToast({ open: true, message: "Task added!", type: "success" });
+    if (!title || !user) return;
+    
+    setLoading(true);
+    try {
+      const taskData = {
+        title,
+        completed: false,
+        createdAt: Date.now(),
+        notes: noteInput.trim() || undefined,
+        dueDate: dueDateInput || undefined
+      };
+      
+      const taskId = await addUserTask(user.uid, taskData);
+      if (taskId) {
+        // Add to local state for immediate feedback
+        setTasks(prev => [{ id: taskId, ...taskData }, ...prev]);
+        setInput("");
+        setNoteInput("");
+        setDueDateInput("");
+        inputRef.current?.focus();
+        setToast({ open: true, message: "Task added!", type: "success" });
+      } else {
+        setToast({ open: true, message: "Failed to add task", type: "error" });
+      }
+    } catch (error) {
+      setToast({ open: true, message: "Failed to add task", type: "error" });
+    } finally {
+      setLoading(false);
+    }
   }
 
   // Toggle task completion
-  function toggleTask(id: string) {
-    setTasks(tasks =>
-      tasks.map(t => (t.id === id ? { ...t, completed: !t.completed } : t))
-    );
+  async function toggleTask(id: string) {
+    if (!user) return;
+    
+    const task = tasks.find(t => t.id === id);
+    if (!task) return;
+    
+    // Optimistic update
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
+    
+    try {
+      const success = await toggleUserTask(user.uid, id, !task.completed);
+      if (!success) {
+        // Revert on failure
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: task.completed } : t));
+        setToast({ open: true, message: "Failed to update task", type: "error" });
+      }
+    } catch (error) {
+      // Revert on failure
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: task.completed } : t));
+      setToast({ open: true, message: "Failed to update task", type: "error" });
+    }
   }
 
   // Delete a task
-  function deleteTask(id: string) {
-    setTasks(tasks => tasks.filter(t => t.id !== id));
-    setToast({ open: true, message: "Task deleted.", type: "info" });
+  async function deleteTask(id: string) {
+    if (!user) return;
+    
+    // Optimistic update
+    const taskToDelete = tasks.find(t => t.id === id);
+    setTasks(prev => prev.filter(t => t.id !== id));
+    
+    try {
+      const success = await deleteUserTask(user.uid, id);
+      if (success) {
+        setToast({ open: true, message: "Task deleted.", type: "info" });
+      } else {
+        // Revert on failure
+        if (taskToDelete) {
+          setTasks(prev => [...prev, taskToDelete]);
+        }
+        setToast({ open: true, message: "Failed to delete task", type: "error" });
+      }
+    } catch (error) {
+      // Revert on failure
+      if (taskToDelete) {
+        setTasks(prev => [...prev, taskToDelete]);
+      }
+      setToast({ open: true, message: "Failed to delete task", type: "error" });
+    }
+  }
+
+  // Add function to start editing
+  function startEdit(task: Task) {
+    setEditingId(task.id);
+    setEditValue(task.title);
+    setEditNote(task.notes || "");
+    setEditDueDate(task.dueDate || "");
+  }
+
+  // Add function to save edit
+  async function saveEdit(id: string) {
+    if (!user) return;
+    
+    try {
+      const updates = {
+        title: editValue,
+        notes: editNote || undefined,
+        dueDate: editDueDate || undefined
+      };
+      
+      const success = await updateUserTask(user.uid, id, updates);
+      if (success) {
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+        setEditingId(null);
+        setEditValue("");
+        setEditNote("");
+        setEditDueDate("");
+        setToast({ open: true, message: "Task updated!", type: "success" });
+      } else {
+        setToast({ open: true, message: "Failed to update task", type: "error" });
+      }
+    } catch (error) {
+      setToast({ open: true, message: "Failed to update task", type: "error" });
+    }
+  }
+
+  // Add function to cancel edit
+  function cancelEdit() {
+    setEditingId(null);
+    setEditValue("");
+    setEditNote("");
+    setEditDueDate("");
   }
 
   // Filtered tasks
@@ -204,32 +302,6 @@ export default function HomePage() {
 
   // Roving tabindex for accessibility
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
-
-  // Add function to start editing
-  function startEdit(task: Task) {
-    setEditingId(task.id);
-    setEditValue(task.title);
-    setEditNote(task.notes || "");
-    setEditDueDate(task.dueDate || "");
-  }
-
-  // Add function to save edit
-  function saveEdit(id: string) {
-    setTasks(tasks => tasks.map(t => t.id === id ? { ...t, title: editValue, notes: editNote, dueDate: editDueDate || undefined } : t));
-    setEditingId(null);
-    setEditValue("");
-    setEditNote("");
-    setEditDueDate("");
-    setToast({ open: true, message: "Task updated!", type: "success" });
-  }
-
-  // Add function to cancel edit
-  function cancelEdit() {
-    setEditingId(null);
-    setEditValue("");
-    setEditNote("");
-    setEditDueDate("");
-  }
 
   // Group tasks by due date
   function groupTasksByDueDate(tasks: Task[]) {
@@ -263,9 +335,21 @@ export default function HomePage() {
   }
   const groupedTasks = groupTasksByDueDate(filteredTasks);
 
+  if (!user) {
+    return <AuthForm onAuth={() => {}} />;
+  }
+
   return (
     <div className="min-h-screen bg-bg-900 flex flex-col items-center py-16 px-4" dir="auto">
       <div className="w-full max-w-xl">
+        <div className="flex justify-end mb-4">
+          <button
+            onClick={() => signOut(auth)}
+            className="px-4 py-2 rounded bg-bg-700 text-text-200 hover:bg-bg-800 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+          >
+            Sign Out
+          </button>
+        </div>
         <h1 className="text-4xl font-semibold mb-8 text-text-100 tracking-tight" style={{letterSpacing: '-0.25px'}}>To-Do List</h1>
         <form
           onSubmit={addTask}
@@ -317,7 +401,7 @@ export default function HomePage() {
             <div className="relative flex flex-wrap gap-2 mt-3">
               <button
                 type="button"
-                className="flex items-center gap-1 px-4 py-2 rounded-full bg-bg-900 border border-border-600 text-text-100 text-base font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500"
+                className="flex items-center gap-1 px-4 py-2 rounded-full bg-bg-900 border border-border-600 text-text-100 text-base font-medium cursor-pointer hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
                 onClick={() => setShowCalendar(true)}
               >
                 {dueDateInput
@@ -333,7 +417,7 @@ export default function HomePage() {
                   : 'Add date'}
                 {dueDateInput && (
                   <span
-                    className="ml-2 text-text-300 cursor-pointer hover:text-state-error"
+                    className="ml-2 text-text-300 cursor-pointer hover:text-state-error active:text-red-600 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
                     onClick={e => { e.stopPropagation(); setDueDateInput(""); }}
                     aria-label="Clear date"
                   >
@@ -344,7 +428,7 @@ export default function HomePage() {
               {showCalendar && (
                 <CalendarDropdown
                   value={dueDateInput}
-                  onChange={date => setDueDateInput(date)}
+                  onChange={date => { setDueDateInput(date); setShowCalendar(false); }}
                   onClose={() => setShowCalendar(false)}
                 />
               )}
@@ -355,7 +439,7 @@ export default function HomePage() {
           {(["all", "active", "completed"] as Filter[]).map(f => (
             <button
               key={f}
-              className={`px-4 py-2 rounded-full font-medium text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all ${filter === f ? "bg-brand-500 text-bg-900" : "bg-bg-800 text-text-200 hover:bg-bg-700 border border-border-600"}`}
+              className={`px-4 py-2 rounded-full font-medium text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${filter === f ? "bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700" : "bg-bg-800 text-text-200 hover:bg-bg-700 active:bg-bg-600 border border-border-600"}`}
               onClick={() => setFilter(f)}
               aria-pressed={filter === f}
               role="tab"
@@ -366,22 +450,30 @@ export default function HomePage() {
           ))}
         </div>
         <ol className="space-y-6" aria-label="Task list">
-          {groupedTasks.length === 0 && (
+          {tasksLoading && (
+            <li className="flex justify-center py-16">
+              <div className="text-text-200">Loading tasks...</div>
+            </li>
+          )}
+          {!tasksLoading && groupedTasks.length === 0 && (
             <li className="flex flex-col items-center justify-center py-16 bg-bg-800 rounded-lg shadow-2 text-text-200 text-lg font-medium select-none">
               <span className="mb-2">Add your first task</span>
               <span className="text-sm text-text-300">Stay organized and productive</span>
             </li>
           )}
-          {groupedTasks.map(group => (
+          {!tasksLoading && groupedTasks.map(group => (
             <li key={group.key}>
               <div className="mb-2 text-accent-amber font-semibold text-base">{group.key}</div>
               <ol className="space-y-3">
                 {group.tasks.map((task, idx) => (
                   <li
                     key={task.id}
-                    className="flex items-center gap-3 bg-bg-800 min-h-[56px] rounded-lg shadow-2 px-4 py-3 group transition-all cursor-move"
-                    draggable
-                    onDragStart={e => onDragStart(e, task.id)}
+                    className={`${editingId === task.id 
+                      ? "bg-bg-800 min-h-[56px] rounded-lg shadow-2 p-4 border border-border-600" 
+                      : "flex items-center gap-3 bg-bg-800 min-h-[56px] rounded-lg shadow-2 px-4 py-3 group transition-all cursor-move"
+                    }`}
+                    draggable={editingId !== task.id}
+                    onDragStart={editingId !== task.id ? e => onDragStart(e, task.id) : undefined}
                     onDragOver={e => e.preventDefault()}
                     onDrop={e => onDrop(e, task.id)}
                     tabIndex={focusedIdx === idx ? 0 : -1}
@@ -396,21 +488,10 @@ export default function HomePage() {
                     }}
                     dir="auto"
                   >
-                    <span className="flex items-center justify-center h-full mt-1">
-                      <input
-                        type="checkbox"
-                        checked={task.completed}
-                        onChange={() => toggleTask(task.id)}
-                        className="w-5 h-5 accent-brand-500 rounded focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all align-middle"
-                        aria-label={task.completed ? "Mark as incomplete" : "Mark as complete"}
-                        role="checkbox"
-                        aria-checked={task.completed}
-                      />
-                    </span>
                     {editingId === task.id ? (
                       <form
                         onSubmit={e => { e.preventDefault(); saveEdit(task.id); }}
-                        className="w-full bg-bg-800 rounded-lg shadow-2 p-4 flex items-start gap-4 border border-border-600"
+                        className="flex items-start gap-4 w-full"
                       >
                         {/* Checkbox on the left */}
                         <span className="flex items-start pt-2">
@@ -450,7 +531,7 @@ export default function HomePage() {
                           <div className="relative flex flex-wrap gap-2 mt-3">
                             <button
                               type="button"
-                              className="flex items-center gap-1 px-4 py-2 rounded-full bg-bg-900 border border-border-600 text-text-100 text-base font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500"
+                              className="flex items-center gap-1 px-4 py-2 rounded-full bg-bg-900 border border-border-600 text-text-100 text-base font-medium cursor-pointer hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
                               onClick={() => setShowEditCalendar(task.id)}
                             >
                               {editDueDate
@@ -466,7 +547,7 @@ export default function HomePage() {
                                 : 'Add date'}
                               {editDueDate && (
                                 <span
-                                  className="ml-2 text-text-300 cursor-pointer hover:text-state-error"
+                                  className="ml-2 text-text-300 cursor-pointer hover:text-state-error active:text-red-600 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
                                   onClick={e => { e.stopPropagation(); setEditDueDate(""); }}
                                   aria-label="Clear date"
                                 >
@@ -477,48 +558,76 @@ export default function HomePage() {
                             {showEditCalendarId === task.id && (
                               <CalendarDropdown
                                 value={editDueDate}
-                                onChange={date => setEditDueDate(date)}
+                                onChange={date => { setEditDueDate(date); setShowEditCalendar(null); }}
                                 onClose={() => setShowEditCalendar(null)}
                               />
                             )}
                           </div>
                           <div className="flex gap-2 mt-4">
-                            <button type="submit" className="px-4 py-2 rounded-md bg-brand-500 text-bg-900 font-medium">Save</button>
-                            <button type="button" onClick={cancelEdit} className="px-4 py-2 rounded-md bg-bg-700 text-text-200">Cancel</button>
+                            <button type="submit" className="px-4 py-2 rounded-md bg-brand-500 text-bg-900 font-medium hover:bg-brand-600 active:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]">Save</button>
+                            <button type="button" onClick={() => setEditingId(null)} className="px-4 py-2 rounded-md bg-bg-700 text-text-200 border border-border-600 hover:bg-bg-600 active:bg-bg-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]">Cancel</button>
                           </div>
                         </div>
+                        {/* Delete button in edit mode */}
+                        <button
+                          type="button"
+                          onClick={() => deleteTask(task.id)}
+                          className="ml-2 px-3 py-1 rounded-full bg-transparent text-state-error hover:bg-state-error hover:text-bg-900 active:bg-red-600 active:text-bg-900 focus:outline-none focus:ring-2 focus:ring-state-error focus:ring-offset-2 focus:ring-offset-bg-900 text-sm font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                          aria-label="Delete task"
+                          style={{fontFamily: 'var(--font-sans)'}}
+                          tabIndex={0}
+                        >
+                          <Trash2 className="w-5 h-5" aria-hidden="true" />
+                        </button>
                       </form>
                     ) : (
-                      <div className="flex-1 flex flex-col">
-                        <span className={`text-lg select-text ${task.completed ? "line-through text-text-300" : "text-text-100"}`} style={{fontFamily: 'var(--font-sans)'}}>{task.title}</span>
-                        {task.notes && <span className="text-sm text-text-300 mt-1 whitespace-pre-line">{task.notes}</span>}
-                        {task.dueDate && <span className="text-xs text-accent-amber mt-1">Due: {task.dueDate}</span>}
-                      </div>
+                      <>
+                        <span className="flex items-center justify-center h-full mt-1">
+                          <input
+                            type="checkbox"
+                            checked={task.completed}
+                            onChange={() => toggleTask(task.id)}
+                            className="w-5 h-5 accent-brand-500 rounded focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all align-middle"
+                            aria-label={task.completed ? "Mark as incomplete" : "Mark as complete"}
+                            role="checkbox"
+                            aria-checked={task.completed}
+                          />
+                        </span>
+                        <div className="flex-1 flex flex-col">
+                          <span className={`text-lg select-text ${task.completed ? "line-through text-text-300" : "text-text-100"}`} style={{fontFamily: 'var(--font-sans)'}}>{task.title}</span>
+                          {task.notes && <span className="text-sm text-text-300 mt-1 whitespace-pre-line">{task.notes}</span>}
+                          {task.dueDate && <span className="text-xs text-accent-amber mt-1">Due: {task.dueDate}</span>}
+                        </div>
+                        {task.completed && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-state-success text-bg-900 ml-2" role="status">Done</span>
+                        )}
+                        <button
+                          onClick={() => deleteTask(task.id)}
+                          className="ml-2 px-3 py-1 rounded-full bg-transparent text-state-error hover:bg-state-error hover:text-bg-900 active:bg-red-600 active:text-bg-900 focus:outline-none focus:ring-2 focus:ring-state-error focus:ring-offset-2 focus:ring-offset-bg-900 text-sm font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] relative group"
+                          aria-label="Delete task"
+                          style={{fontFamily: 'var(--font-sans)'}}
+                          tabIndex={0}
+                        >
+                          <Trash2 className="w-5 h-5" aria-hidden="true" />
+                        </button>
+                        <button
+                          onClick={() => startEdit(task)}
+                          className={`ml-2 px-3 py-1 rounded-full text-sm font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500 ${
+                            editingId !== null 
+                              ? "bg-bg-800 text-text-300 border border-border-600 cursor-not-allowed opacity-50" 
+                              : "bg-bg-700 text-text-200 border border-border-600 hover:bg-bg-600 active:bg-bg-500"
+                          }`}
+                          aria-label="Edit task"
+                          tabIndex={0}
+                          disabled={editingId !== null}
+                        >
+                          Edit
+                        </button>
+                        <span className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity" aria-hidden="true">
+                          <GripVertical className="w-5 h-5 text-text-300" />
+                        </span>
+                      </>
                     )}
-                    {task.completed && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-state-success text-bg-900 ml-2" role="status">Done</span>
-                    )}
-                    <button
-                      onClick={() => deleteTask(task.id)}
-                      className="ml-2 px-3 py-1 rounded-full bg-transparent text-state-error hover:bg-state-error hover:text-bg-900 focus:outline-none focus:ring-2 focus:ring-state-error focus:ring-offset-2 focus:ring-offset-bg-900 text-sm font-medium transition-all relative group"
-                      aria-label="Delete task"
-                      style={{fontFamily: 'var(--font-sans)'}}
-                      tabIndex={0}
-                    >
-                      <Trash2 className="w-5 h-5" aria-hidden="true" />
-                    </button>
-                    <button
-                      onClick={() => startEdit(task)}
-                      className="ml-2 px-3 py-1 rounded-full bg-bg-700 text-text-200 hover:bg-bg-800 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm font-medium transition-all"
-                      aria-label="Edit task"
-                      tabIndex={0}
-                      disabled={editingId !== null}
-                    >
-                      Edit
-                    </button>
-                    <span className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity" aria-hidden="true">
-                      <GripVertical className="w-5 h-5 text-text-300" />
-                    </span>
                   </li>
                 ))}
               </ol>
