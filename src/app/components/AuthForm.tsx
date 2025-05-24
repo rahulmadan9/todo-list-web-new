@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { auth } from "../firebase";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
 
 export default function AuthForm({ onAuth }: { onAuth: () => void }) {
   const [email, setEmail] = useState("");
@@ -20,8 +20,8 @@ export default function AuthForm({ onAuth }: { onAuth: () => void }) {
         await createUserWithEmailAndPassword(auth, email, password);
       }
       onAuth();
-    } catch (err: any) {
-      setError(err.message || "Authentication failed");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Authentication failed");
     } finally {
       setLoading(false);
     }

@@ -7,8 +7,7 @@ import {
   updateDoc, 
   deleteDoc, 
   query, 
-  orderBy,
-  serverTimestamp 
+  orderBy
 } from "firebase/firestore";
 
 // Task type (matching the existing interface)
@@ -75,7 +74,7 @@ export async function updateUserTask(userId: string, taskId: string, updates: Pa
     const taskRef = doc(db, "users", userId, "tasks", taskId);
     
     // Clean the update data to ensure Firestore compatibility
-    const cleanUpdates: any = {};
+    const cleanUpdates: Partial<Omit<Task, "id">> = {};
     
     // Only include defined values, convert empty strings to null
     if (updates.title !== undefined) {
@@ -85,10 +84,10 @@ export async function updateUserTask(userId: string, taskId: string, updates: Pa
       cleanUpdates.completed = updates.completed;
     }
     if (updates.notes !== undefined) {
-      cleanUpdates.notes = updates.notes || null;
+      cleanUpdates.notes = updates.notes || undefined;
     }
     if (updates.dueDate !== undefined) {
-      cleanUpdates.dueDate = updates.dueDate || null;
+      cleanUpdates.dueDate = updates.dueDate || undefined;
     }
     if (updates.createdAt !== undefined) {
       cleanUpdates.createdAt = updates.createdAt;

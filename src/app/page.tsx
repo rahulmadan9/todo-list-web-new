@@ -1,10 +1,10 @@
 "use client";
-import { useEffect, useRef, useState, RefObject } from "react";
+import { useEffect, useRef, useState } from "react";
 import Toast, { ToastType } from "./components/Toast";
-import { Trash2, GripVertical, CheckCircle2 } from "lucide-react";
+import { Trash2, GripVertical } from "lucide-react";
 import AuthForm from "./components/AuthForm";
 import { auth } from "./firebase";
-import { onAuthStateChanged, signOut } from "firebase/auth";
+import { onAuthStateChanged, signOut, User } from "firebase/auth";
 import { loadUserTasks, addUserTask, updateUserTask, deleteUserTask, toggleUserTask, Task } from "./lib/firestore";
 
 type Filter = "all" | "active" | "completed";
@@ -20,12 +20,6 @@ function isToday(date: Date) {
   const now = new Date();
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
 }
-function isTomorrow(date: Date) {
-  const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(now.getDate() + 1);
-  return date.getFullYear() === tomorrow.getFullYear() && date.getMonth() === tomorrow.getMonth() && date.getDate() === tomorrow.getDate();
-}
 
 // Calendar dropdown component
 function CalendarDropdown({ value, onChange, onClose }: { value?: string, onChange: (date: string) => void, onClose: () => void }) {
@@ -38,8 +32,9 @@ function CalendarDropdown({ value, onChange, onClose }: { value?: string, onChan
       setMonth(d.getMonth());
       setYear(d.getFullYear());
     } else {
-      setMonth(today.getMonth());
-      setYear(today.getFullYear());
+      const currentDate = new Date();
+      setMonth(currentDate.getMonth());
+      setYear(currentDate.getFullYear());
     }
   }, [value]);
   const daysInMonth = getDaysInMonth(year, month);
@@ -111,11 +106,9 @@ export default function HomePage() {
   const [noteInput, setNoteInput] = useState("");
   const [editNote, setEditNote] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
-  const dateInputRef = useRef<HTMLInputElement>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [showEditCalendarId, setShowEditCalendar] = useState<string | null>(null);
-  const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [dueDateInput, setDueDateInput] = useState("");
   const [taskRows, setTaskRows] = useState(1);
@@ -141,7 +134,7 @@ export default function HomePage() {
     try {
       const userTasks = await loadUserTasks(userId);
       setTasks(userTasks);
-    } catch (error) {
+    } catch {
       setToast({ open: true, message: "Failed to load tasks", type: "error" });
     } finally {
       setTasksLoading(false);
@@ -161,12 +154,12 @@ export default function HomePage() {
   // Add a new task
   async function addTask(e: React.FormEvent) {
     e.preventDefault();
-    if (!canCreateTask() || !user) return;
+    const title = input.trim();
+    if (!title || !user) return;
     
-    setLoading(true);
     try {
       const taskData = {
-        title: input.trim() || "Untitled Task", // Provide default title if empty
+        title,
         completed: false,
         createdAt: Date.now(),
         notes: noteInput.trim() || undefined,
@@ -180,16 +173,13 @@ export default function HomePage() {
         setInput("");
         setNoteInput("");
         setDueDateInput("");
-        setTaskRows(1); // Reset textarea rows
         inputRef.current?.focus();
         setToast({ open: true, message: "Task added!", type: "success" });
       } else {
         setToast({ open: true, message: "Failed to add task", type: "error" });
       }
-    } catch (error) {
+    } catch {
       setToast({ open: true, message: "Failed to add task", type: "error" });
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -222,7 +212,7 @@ export default function HomePage() {
         // Regular Enter: create task if there's content
         e.preventDefault();
         if (canCreateTask()) {
-          addTask(e as any);
+          addTask(e as React.FormEvent);
         }
         return;
       }
@@ -291,7 +281,7 @@ export default function HomePage() {
         setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: task.completed } : t));
         setToast({ open: true, message: "Failed to update task", type: "error" });
       }
-    } catch (error) {
+    } catch {
       // Revert on failure
       setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: task.completed } : t));
       setToast({ open: true, message: "Failed to update task", type: "error" });
@@ -317,7 +307,7 @@ export default function HomePage() {
         }
         setToast({ open: true, message: "Failed to delete task", type: "error" });
       }
-    } catch (error) {
+    } catch {
       // Revert on failure
       if (taskToDelete) {
         setTasks(prev => [...prev, taskToDelete]);
@@ -358,18 +348,9 @@ export default function HomePage() {
       } else {
         setToast({ open: true, message: "Failed to update task", type: "error" });
       }
-    } catch (error) {
+    } catch {
       setToast({ open: true, message: "Failed to update task", type: "error" });
     }
-  }
-
-  // Add function to cancel edit
-  function cancelEdit() {
-    setEditingId(null);
-    setEditValue("");
-    setEditNote("");
-    setEditDueDate("");
-    setEditTaskRows(1);
   }
 
   // Filtered tasks
@@ -534,7 +515,6 @@ export default function HomePage() {
               className={`px-4 py-2 rounded-full font-medium text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${filter === f ? "bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700" : "bg-bg-800 text-text-200 hover:bg-bg-700 active:bg-bg-600 border border-border-600"}`}
               onClick={() => setFilter(f)}
               aria-pressed={filter === f}
-              role="tab"
               style={{fontFamily: 'var(--font-sans)'}}
             >
               {f.charAt(0).toUpperCase() + f.slice(1)}
