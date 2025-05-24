@@ -114,6 +114,7 @@ export default function HomePage() {
   const [dueDateInput, setDueDateInput] = useState("");
   const [taskRows, setTaskRows] = useState(1);
   const [editTaskRows, setEditTaskRows] = useState(1);
+  const [showCreateTask, setShowCreateTask] = useState(false);
 
   // Track authentication state
   useEffect(() => {
@@ -128,6 +129,13 @@ export default function HomePage() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Focus input when creating a new task
+  useEffect(() => {
+    if (showCreateTask && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [showCreateTask]);
 
   // Load tasks from Firestore
   async function loadTasks(userId: string) {
@@ -157,6 +165,24 @@ export default function HomePage() {
     return titleHasContent || notesHasContent || hasDate;
   }
 
+  // Start creating a new task
+  function startCreateTask() {
+    setShowCreateTask(true);
+    setInput("");
+    setNoteInput("");
+    setDueDateInput("");
+    setTaskRows(1);
+  }
+
+  // Cancel creating a new task
+  function cancelCreateTask() {
+    setShowCreateTask(false);
+    setInput("");
+    setNoteInput("");
+    setDueDateInput("");
+    setTaskRows(1);
+  }
+
   // Add a new task
   async function addTask(e: React.FormEvent) {
     e.preventDefault();
@@ -179,6 +205,7 @@ export default function HomePage() {
         setInput("");
         setNoteInput("");
         setDueDateInput("");
+        setTaskRows(1);
         inputRef.current?.focus();
         setToast({ open: true, message: "Task added!", type: "success" });
       } else {
@@ -434,86 +461,128 @@ export default function HomePage() {
           </button>
         </div>
         <h1 className="text-4xl font-semibold mb-8 text-text-100 tracking-tight" style={{letterSpacing: '-0.25px'}}>To-Do List</h1>
-        <form
-          onSubmit={addTask}
-          className="mb-8 w-full bg-bg-800 rounded-lg shadow-2 p-4 flex items-start gap-4 border border-border-600"
-          aria-label="Add a new task"
-        >
-          {/* Checkbox on the left */}
-          <span className="flex items-start pt-2">
-            <input
-              type="checkbox"
-              disabled
-              className="w-6 h-6 rounded-full border-2 border-border-600 bg-bg-900 cursor-default"
-              tabIndex={-1}
-              aria-hidden="true"
-            />
-          </span>
-          {/* Main content */}
-          <div className="flex-1 flex flex-col gap-1">
-            <textarea
-              id="task-title"
-              ref={inputRef}
-              className="w-full bg-transparent border-none outline-none text-lg text-text-100 placeholder-text-300 font-medium resize-none focus:ring-0 focus:outline-none"
-              placeholder="Task"
-              value={input}
-              onChange={handleTaskInputChange}
-              aria-label="Task title"
-              style={{fontFamily: 'var(--font-sans)'}}
-              dir="auto"
-              rows={taskRows}
-              onKeyDown={e => handleTaskKeyDown(e)}
-            />
-            {/* Notes textarea */}
-            <textarea
-              className="w-full bg-transparent border-none outline-none text-base text-text-100 placeholder-text-300 font-normal resize-none focus:ring-0 focus:outline-none mt-1"
-              placeholder="Description"
-              value={noteInput}
-              onChange={e => setNoteInput(e.target.value)}
-              aria-label="Task description"
-              style={{fontFamily: 'var(--font-sans)'}}
-              dir="auto"
-              rows={2}
-              onKeyDown={e => handleTaskKeyDown(e, true)}
-            />
-            {/* Date pill and calendar dropdown */}
-            <div className="relative flex flex-wrap gap-2 mt-3">
-              <button
-                type="button"
-                className="flex items-center gap-1 px-4 py-2 rounded-full bg-bg-900 border border-border-600 text-text-100 text-base font-medium cursor-pointer hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
-                onClick={() => setShowCalendar(true)}
-              >
-                {dueDateInput
-                  ? (() => {
-                      const today = new Date();
-                      const tomorrow = new Date();
-                      tomorrow.setDate(today.getDate() + 1);
-                      const selected = new Date(dueDateInput);
-                      if (selected.toDateString() === today.toDateString()) return 'Today';
-                      if (selected.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
-                      return selected.toLocaleDateString();
-                    })()
-                  : 'Add date'}
-                {dueDateInput && (
-                  <span
-                    className="ml-2 text-text-300 cursor-pointer hover:text-state-error active:text-red-600 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
-                    onClick={e => { e.stopPropagation(); setDueDateInput(""); }}
-                    aria-label="Clear date"
-                  >
-                    ×
-                  </span>
-                )}
-              </button>
-              {showCalendar && (
-                <CalendarDropdown
-                  value={dueDateInput}
-                  onChange={date => { setDueDateInput(date); setShowCalendar(false); }}
-                  onClose={() => setShowCalendar(false)}
-                />
-              )}
-            </div>
+        
+        {/* Create Task CTA or Form */}
+        {!showCreateTask ? (
+          <div className="mb-8">
+            <button
+              onClick={startCreateTask}
+              className="w-full flex items-center justify-center gap-3 bg-bg-800 hover:bg-bg-700 active:bg-bg-600 border border-border-600 rounded-lg shadow-2 p-6 text-text-200 hover:text-text-100 font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500"
+              aria-label="Create a new task"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+              Add new task
+            </button>
           </div>
-        </form>
+        ) : (
+          <form
+            onSubmit={addTask}
+            className="mb-8 w-full bg-bg-800 rounded-lg shadow-2 p-4 border border-border-600"
+            aria-label="Add a new task"
+          >
+            <div className="flex items-start gap-4">
+              {/* Checkbox on the left */}
+              <span className="flex items-start pt-2">
+                <input
+                  type="checkbox"
+                  disabled
+                  className="w-6 h-6 rounded-full border-2 border-border-600 bg-bg-900 cursor-default"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                />
+              </span>
+              {/* Main content */}
+              <div className="flex-1 flex flex-col gap-1">
+                <textarea
+                  id="task-title"
+                  ref={inputRef}
+                  className="w-full bg-transparent border-none outline-none text-lg text-text-100 placeholder-text-300 font-medium resize-none focus:ring-0 focus:outline-none"
+                  placeholder="Task"
+                  value={input}
+                  onChange={handleTaskInputChange}
+                  aria-label="Task title"
+                  style={{fontFamily: 'var(--font-sans)'}}
+                  dir="auto"
+                  rows={taskRows}
+                  onKeyDown={e => handleTaskKeyDown(e)}
+                />
+                {/* Notes textarea */}
+                <textarea
+                  className="w-full bg-transparent border-none outline-none text-base text-text-100 placeholder-text-300 font-normal resize-none focus:ring-0 focus:outline-none mt-1"
+                  placeholder="Description"
+                  value={noteInput}
+                  onChange={e => setNoteInput(e.target.value)}
+                  aria-label="Task description"
+                  style={{fontFamily: 'var(--font-sans)'}}
+                  dir="auto"
+                  rows={2}
+                  onKeyDown={e => handleTaskKeyDown(e, true)}
+                />
+                {/* Date pill and calendar dropdown */}
+                <div className="relative flex flex-wrap gap-2 mt-3">
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 px-4 py-2 rounded-full bg-bg-900 border border-border-600 text-text-100 text-base font-medium cursor-pointer hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                    onClick={() => setShowCalendar(true)}
+                  >
+                    {dueDateInput
+                      ? (() => {
+                          const today = new Date();
+                          const tomorrow = new Date();
+                          tomorrow.setDate(today.getDate() + 1);
+                          const selected = new Date(dueDateInput);
+                          if (selected.toDateString() === today.toDateString()) return 'Today';
+                          if (selected.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
+                          return selected.toLocaleDateString();
+                        })()
+                      : 'Add date'}
+                    {dueDateInput && (
+                      <span
+                        className="ml-2 text-text-300 cursor-pointer hover:text-state-error active:text-red-600 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                        onClick={e => { e.stopPropagation(); setDueDateInput(""); }}
+                        aria-label="Clear date"
+                      >
+                        ×
+                      </span>
+                    )}
+                  </button>
+                  {showCalendar && (
+                    <CalendarDropdown
+                      value={dueDateInput}
+                      onChange={date => { setDueDateInput(date); setShowCalendar(false); }}
+                      onClose={() => setShowCalendar(false)}
+                    />
+                  )}
+                </div>
+                
+                {/* Save and Cancel buttons */}
+                <div className="flex gap-2 mt-4">
+                  <button 
+                    type="submit" 
+                    className={`px-4 py-2 rounded-md font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 ${
+                      canCreateTask() 
+                        ? "bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700" 
+                        : "bg-bg-600 text-text-300 cursor-not-allowed opacity-50"
+                    }`}
+                    disabled={!canCreateTask()}
+                  >
+                    Save
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={cancelCreateTask}
+                    className="px-4 py-2 rounded-md bg-bg-700 text-text-200 border border-border-600 hover:bg-bg-600 active:bg-bg-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </form>
+        )}
+        
         <div className="flex gap-2 mb-6" role="tablist" aria-label="Task filters">
           {(["all", "active", "completed"] as Filter[]).map(f => (
             <button
