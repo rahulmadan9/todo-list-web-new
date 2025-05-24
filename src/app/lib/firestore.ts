@@ -73,10 +73,34 @@ export async function addUserTask(userId: string, taskData: Omit<Task, "id">): P
 export async function updateUserTask(userId: string, taskId: string, updates: Partial<Omit<Task, "id">>): Promise<boolean> {
   try {
     const taskRef = doc(db, "users", userId, "tasks", taskId);
-    await updateDoc(taskRef, updates);
+    
+    // Clean the update data to ensure Firestore compatibility
+    const cleanUpdates: any = {};
+    
+    // Only include defined values, convert empty strings to null
+    if (updates.title !== undefined) {
+      cleanUpdates.title = updates.title;
+    }
+    if (updates.completed !== undefined) {
+      cleanUpdates.completed = updates.completed;
+    }
+    if (updates.notes !== undefined) {
+      cleanUpdates.notes = updates.notes || null;
+    }
+    if (updates.dueDate !== undefined) {
+      cleanUpdates.dueDate = updates.dueDate || null;
+    }
+    if (updates.createdAt !== undefined) {
+      cleanUpdates.createdAt = updates.createdAt;
+    }
+    
+    console.log("Updating task with cleaned data:", cleanUpdates);
+    
+    await updateDoc(taskRef, cleanUpdates);
     return true;
   } catch (error) {
     console.error("Error updating task:", error);
+    console.error("Error details:", (error as Error).message);
     return false;
   }
 }

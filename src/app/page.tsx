@@ -118,6 +118,8 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [dueDateInput, setDueDateInput] = useState("");
+  const [taskRows, setTaskRows] = useState(1);
+  const [editTaskRows, setEditTaskRows] = useState(1);
 
   // Track authentication state
   useEffect(() => {
@@ -146,16 +148,25 @@ export default function HomePage() {
     }
   }
 
+  // Check if task creation should be allowed
+  function canCreateTask() {
+    const titleHasContent = input.trim().length > 0;
+    const notesHasContent = noteInput.trim().length > 0;
+    const hasDate = dueDateInput.length > 0;
+    
+    // Allow creation if any field has actual content (not just spaces)
+    return titleHasContent || notesHasContent || hasDate;
+  }
+
   // Add a new task
   async function addTask(e: React.FormEvent) {
     e.preventDefault();
-    const title = input.trim();
-    if (!title || !user) return;
+    if (!canCreateTask() || !user) return;
     
     setLoading(true);
     try {
       const taskData = {
-        title,
+        title: input.trim() || "Untitled Task", // Provide default title if empty
         completed: false,
         createdAt: Date.now(),
         notes: noteInput.trim() || undefined,
@@ -169,6 +180,7 @@ export default function HomePage() {
         setInput("");
         setNoteInput("");
         setDueDateInput("");
+        setTaskRows(1); // Reset textarea rows
         inputRef.current?.focus();
         setToast({ open: true, message: "Task added!", type: "success" });
       } else {
@@ -178,6 +190,87 @@ export default function HomePage() {
       setToast({ open: true, message: "Failed to add task", type: "error" });
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Handle key down events for task creation
+  function handleTaskKeyDown(e: React.KeyboardEvent, isDescriptionField = false) {
+    if (e.key === 'Enter') {
+      if (e.shiftKey && !isDescriptionField) {
+        // Shift+Enter in task field: insert newline and expand textarea
+        e.preventDefault();
+        
+        const textarea = e.target as HTMLTextAreaElement;
+        const cursorPosition = textarea.selectionStart;
+        const textBefore = input.substring(0, cursorPosition);
+        const textAfter = input.substring(cursorPosition);
+        const newValue = textBefore + '\n' + textAfter;
+        
+        setInput(newValue);
+        
+        // Update rows based on new content
+        const lines = newValue.split('\n').length;
+        setTaskRows(Math.max(1, lines));
+        
+        // Set cursor position after the inserted newline
+        setTimeout(() => {
+          textarea.setSelectionRange(cursorPosition + 1, cursorPosition + 1);
+        }, 0);
+        
+        return;
+      } else if (!e.shiftKey) {
+        // Regular Enter: create task if there's content
+        e.preventDefault();
+        if (canCreateTask()) {
+          addTask(e as any);
+        }
+        return;
+      }
+    }
+  }
+
+  // Handle task input change and auto-resize
+  function handleTaskInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setInput(e.target.value);
+    
+    // Auto-resize based on content
+    const lines = e.target.value.split('\n').length;
+    setTaskRows(Math.max(1, lines));
+  }
+
+  // Handle edit task input change and auto-resize
+  function handleEditTaskInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setEditValue(e.target.value);
+    
+    // Auto-resize based on content
+    const lines = e.target.value.split('\n').length;
+    setEditTaskRows(Math.max(1, lines));
+  }
+
+  // Handle key down events for edit task
+  function handleEditTaskKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' && e.shiftKey) {
+      // Shift+Enter in edit task field: insert newline and expand textarea
+      e.preventDefault();
+      
+      const textarea = e.target as HTMLTextAreaElement;
+      const cursorPosition = textarea.selectionStart;
+      const textBefore = editValue.substring(0, cursorPosition);
+      const textAfter = editValue.substring(cursorPosition);
+      const newValue = textBefore + '\n' + textAfter;
+      
+      setEditValue(newValue);
+      
+      // Update rows based on new content
+      const lines = newValue.split('\n').length;
+      setEditTaskRows(Math.max(1, lines));
+      
+      // Set cursor position after the inserted newline
+      setTimeout(() => {
+        textarea.setSelectionRange(cursorPosition + 1, cursorPosition + 1);
+      }, 0);
+      
+      return;
     }
   }
 
@@ -239,6 +332,7 @@ export default function HomePage() {
     setEditValue(task.title);
     setEditNote(task.notes || "");
     setEditDueDate(task.dueDate || "");
+    setEditTaskRows(Math.max(1, task.title.split('\n').length));
   }
 
   // Add function to save edit
@@ -259,6 +353,7 @@ export default function HomePage() {
         setEditValue("");
         setEditNote("");
         setEditDueDate("");
+        setEditTaskRows(1);
         setToast({ open: true, message: "Task updated!", type: "success" });
       } else {
         setToast({ open: true, message: "Failed to update task", type: "error" });
@@ -274,6 +369,7 @@ export default function HomePage() {
     setEditValue("");
     setEditNote("");
     setEditDueDate("");
+    setEditTaskRows(1);
   }
 
   // Filtered tasks
@@ -374,17 +470,12 @@ export default function HomePage() {
               className="w-full bg-transparent border-none outline-none text-lg text-text-100 placeholder-text-300 font-medium resize-none focus:ring-0 focus:outline-none"
               placeholder="Task"
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={handleTaskInputChange}
               aria-label="Task title"
               style={{fontFamily: 'var(--font-sans)'}}
               dir="auto"
-              rows={1}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  addTask(e);
-                }
-              }}
+              rows={taskRows}
+              onKeyDown={e => handleTaskKeyDown(e)}
             />
             {/* Notes textarea */}
             <textarea
@@ -396,6 +487,7 @@ export default function HomePage() {
               style={{fontFamily: 'var(--font-sans)'}}
               dir="auto"
               rows={2}
+              onKeyDown={e => handleTaskKeyDown(e, true)}
             />
             {/* Date pill and calendar dropdown */}
             <div className="relative flex flex-wrap gap-2 mt-3">
@@ -499,7 +591,7 @@ export default function HomePage() {
                             type="checkbox"
                             checked={task.completed}
                             onChange={() => toggleTask(task.id)}
-                            className="w-6 h-6 rounded-full border-2 border-border-600 bg-bg-900 accent-brand-500 focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all align-middle"
+                            className="w-6 h-6 rounded-full border-2 border-border-600 bg-bg-900 accent-brand-500 hover:border-brand-500 focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all align-middle cursor-pointer"
                             aria-label={task.completed ? "Mark as incomplete" : "Mark as complete"}
                             role="checkbox"
                             aria-checked={task.completed}
@@ -511,11 +603,12 @@ export default function HomePage() {
                             className="w-full bg-transparent border-none outline-none text-lg text-text-100 placeholder-text-300 font-medium resize-none focus:ring-0 focus:outline-none"
                             placeholder="Task"
                             value={editValue}
-                            onChange={e => setEditValue(e.target.value)}
+                            onChange={handleEditTaskInputChange}
+                            onKeyDown={handleEditTaskKeyDown}
                             aria-label="Edit task title"
                             style={{fontFamily: 'var(--font-sans)'}}
                             dir="auto"
-                            rows={1}
+                            rows={editTaskRows}
                           />
                           <textarea
                             className="w-full bg-transparent border-none outline-none text-base text-text-100 placeholder-text-300 font-normal resize-none focus:ring-0 focus:outline-none mt-1"
@@ -587,7 +680,7 @@ export default function HomePage() {
                             type="checkbox"
                             checked={task.completed}
                             onChange={() => toggleTask(task.id)}
-                            className="w-5 h-5 accent-brand-500 rounded focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all align-middle"
+                            className="w-5 h-5 accent-brand-500 rounded hover:border-brand-500 focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all align-middle cursor-pointer"
                             aria-label={task.completed ? "Mark as incomplete" : "Mark as complete"}
                             role="checkbox"
                             aria-checked={task.completed}
