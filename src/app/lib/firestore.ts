@@ -7,7 +7,9 @@ import {
   updateDoc, 
   deleteDoc, 
   query, 
-  orderBy
+  orderBy,
+  enableNetwork,
+  disableNetwork
 } from "firebase/firestore";
 
 // Task type (matching the existing interface)
@@ -20,9 +22,29 @@ export interface Task {
   dueDate?: string;
 }
 
-// Load all tasks for a specific user
+// Error handling with retry logic
+async function withRetry<T>(
+  operation: () => Promise<T>, 
+  maxRetries: number = 3,
+  delay: number = 1000
+): Promise<T> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay * attempt));
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
+// Load all tasks for a specific user with retry logic
 export async function loadUserTasks(userId: string): Promise<Task[]> {
-  try {
+  return withRetry(async () => {
     const tasksRef = collection(db, "users", userId, "tasks");
     const q = query(tasksRef, orderBy("createdAt", "desc"));
     const querySnapshot = await getDocs(q);
@@ -31,24 +53,34 @@ export async function loadUserTasks(userId: string): Promise<Task[]> {
       id: doc.id,
       ...doc.data()
     } as Task));
-  } catch (error) {
-    console.error("Error loading tasks:", error);
-    return [];
-  }
+  });
 }
 
-// Add a new task for a specific user
+// Add a new task for a specific user with validation
 export async function addUserTask(userId: string, taskData: Omit<Task, "id">): Promise<string | null> {
-  try {
+  return withRetry(async () => {
+    // Validate input
+    if (!taskData.title?.trim()) {
+      throw new Error("Task title is required");
+    }
+    
+    if (taskData.title.length > 500) {
+      throw new Error("Task title is too long (max 500 characters)");
+    }
+    
+    if (taskData.notes && taskData.notes.length > 2000) {
+      throw new Error("Task notes are too long (max 2000 characters)");
+    }
+    
     console.log("Adding task for user:", userId);
     console.log("Task data:", taskData);
     
     // Clean the data to ensure Firestore compatibility
     const cleanTaskData = {
-      title: taskData.title,
+      title: taskData.title.trim(),
       completed: taskData.completed,
       createdAt: Date.now(),
-      notes: taskData.notes || null,
+      notes: taskData.notes?.trim() || null,
       dueDate: taskData.dueDate || null
     };
     
@@ -61,16 +93,21 @@ export async function addUserTask(userId: string, taskData: Omit<Task, "id">): P
     console.log("Task added successfully with ID:", docRef.id);
     
     return docRef.id;
-  } catch (error) {
-    console.error("Error adding task:", error);
-    console.error("Error details:", (error as Error).message);
-    return null;
-  }
+  });
 }
 
-// Update an existing task
+// Update an existing task with validation
 export async function updateUserTask(userId: string, taskId: string, updates: Partial<Omit<Task, "id">>): Promise<boolean> {
-  try {
+  return withRetry(async () => {
+    // Validate input
+    if (updates.title !== undefined && updates.title.length > 500) {
+      throw new Error("Task title is too long (max 500 characters)");
+    }
+    
+    if (updates.notes !== undefined && updates.notes && updates.notes.length > 2000) {
+      throw new Error("Task notes are too long (max 2000 characters)");
+    }
+    
     const taskRef = doc(db, "users", userId, "tasks", taskId);
     
     // Clean the update data to ensure Firestore compatibility
@@ -78,13 +115,13 @@ export async function updateUserTask(userId: string, taskId: string, updates: Pa
     
     // Only include defined values, convert empty strings to null
     if (updates.title !== undefined) {
-      cleanUpdates.title = updates.title;
+      cleanUpdates.title = updates.title.trim();
     }
     if (updates.completed !== undefined) {
       cleanUpdates.completed = updates.completed;
     }
     if (updates.notes !== undefined) {
-      cleanUpdates.notes = updates.notes || undefined;
+      cleanUpdates.notes = updates.notes?.trim() || undefined;
     }
     if (updates.dueDate !== undefined) {
       cleanUpdates.dueDate = updates.dueDate || undefined;
@@ -97,26 +134,36 @@ export async function updateUserTask(userId: string, taskId: string, updates: Pa
     
     await updateDoc(taskRef, cleanUpdates);
     return true;
-  } catch (error) {
-    console.error("Error updating task:", error);
-    console.error("Error details:", (error as Error).message);
-    return false;
-  }
+  });
 }
 
 // Delete a task
 export async function deleteUserTask(userId: string, taskId: string): Promise<boolean> {
-  try {
+  return withRetry(async () => {
     const taskRef = doc(db, "users", userId, "tasks", taskId);
     await deleteDoc(taskRef);
     return true;
-  } catch (error) {
-    console.error("Error deleting task:", error);
-    return false;
-  }
+  });
 }
 
 // Toggle task completion
 export async function toggleUserTask(userId: string, taskId: string, completed: boolean): Promise<boolean> {
   return updateUserTask(userId, taskId, { completed });
+}
+
+// Network status helpers for offline support
+export async function enableFirestoreNetwork(): Promise<void> {
+  try {
+    await enableNetwork(db);
+  } catch (error) {
+    console.warn("Failed to enable network:", error);
+  }
+}
+
+export async function disableFirestoreNetwork(): Promise<void> {
+  try {
+    await disableNetwork(db);
+  } catch (error) {
+    console.warn("Failed to disable network:", error);
+  }
 } 

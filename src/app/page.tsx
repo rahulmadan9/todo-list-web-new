@@ -6,6 +6,7 @@ import AuthForm from "./components/AuthForm";
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut, User } from "firebase/auth";
 import { loadUserTasks, addUserTask, updateUserTask, deleteUserTask, toggleUserTask, Task } from "./lib/firestore";
+import LoadingSpinner from "./components/LoadingSpinner";
 
 type Filter = "all" | "active" | "completed";
 
@@ -134,8 +135,13 @@ export default function HomePage() {
     try {
       const userTasks = await loadUserTasks(userId);
       setTasks(userTasks);
-    } catch {
-      setToast({ open: true, message: "Failed to load tasks", type: "error" });
+    } catch (error) {
+      console.error("Failed to load tasks:", error);
+      setToast({ 
+        open: true, 
+        message: error instanceof Error ? error.message : "Failed to load tasks", 
+        type: "error" 
+      });
     } finally {
       setTasksLoading(false);
     }
@@ -524,7 +530,10 @@ export default function HomePage() {
         <ol className="space-y-6" aria-label="Task list">
           {tasksLoading && (
             <li className="flex justify-center py-16">
-              <div className="text-text-200">Loading tasks...</div>
+              <div className="flex flex-col items-center gap-4">
+                <LoadingSpinner size="lg" className="text-brand-500" />
+                <div className="text-text-200">Loading tasks...</div>
+              </div>
             </li>
           )}
           {!tasksLoading && groupedTasks.length === 0 && (

@@ -1,9 +1,32 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Helper functions for validation
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    function isValidTask() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['title', 'completed', 'createdAt']) &&
+             data.title is string &&
+             data.title.size() <= 500 &&
+             data.completed is bool &&
+             data.createdAt is number &&
+             (data.get('notes', null) == null || (data.notes is string && data.notes.size() <= 2000)) &&
+             (data.get('dueDate', null) == null || data.dueDate is string);
+    }
+    
     // Users can only access their own tasks
     match /users/{userId}/tasks/{taskId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, delete: if isAuthenticated() && isOwner(userId);
+      allow create: if isAuthenticated() && isOwner(userId) && isValidTask();
+      allow update: if isAuthenticated() && isOwner(userId) && isValidTask() &&
+                    request.resource.data.createdAt == resource.data.createdAt;
     }
     
     // Deny access to all other documents
