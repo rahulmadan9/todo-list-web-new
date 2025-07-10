@@ -1,0 +1,113 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+
+# Automated Testing Rules for BrowserMCP Integration
+
+## General Test Case Principles
+
+<test_case_foundation>
+- Write tests that are isolated, repeatable, and clear
+- Use descriptive test names that explain the scenario and expected outcome
+- Prefer arrange-act-assert structure in each test
+- Ensure tests cover edge cases and error handling
+- Avoid unnecessary mocks or stubs unless required for isolation
+- Each test should be independent and not rely on state from other tests
+- For bug fixes, write a regression test that fails before the fix and passes after
+- When unsure, ask the user for clarification about expected behavior
+</test_case_foundation>
+
+## BrowserMCP-Specific Rules
+
+<browserMCP_test_rules>
+- Always use BrowserMCP tools for navigation, interaction, and validation steps
+- Write tests in BDD format (Given/When/Then) for clarity and readability
+- Use `navigate`, `click`, `type`, `wait`, and `assert` actions as core building blocks
+- For each test, include at least one assertion to verify UI or data state
+- Capture screenshots on test failure for debugging purposes
+- For authentication flows, ensure session isolation between tests
+- Prefer descriptive test names and detailed comments
+- For asynchronous or dynamic content, use `wait` or `waitFor` actions before assertions
+- Always start tests with a clean browser state or explicit navigation
+- Include tests for error states, invalid inputs, and authentication failures
+</browserMCP_test_rules>
+
+## Test Structure Guidelines
+
+<test_structure>
+- Use AAA (Arrange, Act, Assert) pattern in all tests
+- Prefer parameterized tests for functions with multiple input scenarios
+- Use clear, expressive assertion messages
+- For async code, always test both resolved and rejected outcomes
+- Never leave tests with TODOs or incomplete assertions
+- Document the purpose of complex tests with comments
+- Chain test steps logically, mirroring actual user workflows
+- Include both positive and negative test scenarios
+</test_structure>
+
+## BrowserMCP Action Guidelines
+
+<browserMCP_actions>
+- navigate: Always specify full URLs for consistency
+- click: Use descriptive element selectors (text, role, or data attributes)
+- type: Clear fields before typing when necessary
+- wait/waitFor: Use specific conditions rather than arbitrary timeouts
+- assert: Include meaningful error messages in assertions
+- screenshot: Name screenshots descriptively for easy identification
+- Use BrowserMCP's context tools for capturing console logs and network requests
+</browserMCP_actions>
+
+## Test Case Naming and Organization
+
+<test_organization>
+- Use descriptive scenario names that explain the user journey
+- Group related tests in logical scenarios
+- Include test purpose in comments for complex interactions
+- Use consistent naming conventions across all test files
+- Organize tests by feature or user flow
+- Include setup and teardown steps where needed
+</test_organization>
+
+## Error Handling and Debugging
+
+<error_handling>
+- Always include assertion failure messages
+- Capture screenshots on unexpected states
+- Log relevant browser console messages
+- Test for expected error messages and states
+- Include timeout handling for slow-loading elements
+- Validate error recovery scenarios
+</error_handling>
+
+## Example Test Template
+
+<test_template>
+Scenario: [Descriptive name of what is being tested]
+Given [Initial state or precondition]
+When [Action being performed]
+And [Additional actions if needed]
+Then [Expected outcome]
+And [Additional validations]
+</test_template>
+
+## Data Management
+
+<test_data>
+- Use variables for test data to enable reusability
+- Parameterize inputs for different test scenarios
+- Include edge case data (empty strings, special characters, etc.)
+- Use realistic test data that mirrors production scenarios
+- Clean up test data after test execution when applicable
+</test_data>
+
+## Performance and Reliability
+
+<performance_reliability>
+- Include appropriate wait times for dynamic content
+- Test for loading states and transitions
+- Validate responsive behavior across different viewport sizes
+- Include tests for network failures and slow connections
+- Test browser compatibility when relevant
+</performance_reliability>

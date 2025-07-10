@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write", 
+      "Read",
+      "Bash"
+    ]
+  },
+  "projectContext": {
+    "description": "Todo list web application built with Next.js, TypeScript, and Tailwind CSS",
+    "framework": "Next.js",
+    "language": "TypeScript",
+    "styling": "Tailwind CSS",
+    "features": [
+      "Authentication",
+      "Offline support", 
+      "Sync functionality",
+      "Local storage",
+      "Responsive design"
+    ]
+  }
+} 

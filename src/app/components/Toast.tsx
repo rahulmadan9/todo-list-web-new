@@ -1,7 +1,7 @@
 "use client";
 import { useEffect } from "react";
 
-export type ToastType = "success" | "error" | "info";
+export type ToastType = "success" | "error" | "info" | "warning";
 
 export interface ToastProps {
   message: string;
@@ -23,6 +23,7 @@ export default function Toast({ message, type = "info", open, onClose, duration 
   let bg = "bg-state-info";
   if (type === "success") bg = "bg-state-success";
   if (type === "error") bg = "bg-state-error";
+  if (type === "warning") bg = "bg-accent-amber";
 
   return (
     <div
@@ -38,7 +39,7 @@ export default function Toast({ message, type = "info", open, onClose, duration 
         <span className="flex-1 text-base">{message}</span>
         <button
           onClick={onClose}
-          className="ml-2 px-2 py-1 rounded-full bg-bg-700 text-text-200 hover:bg-bg-800 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 text-sm font-medium transition-all"
+          className="ml-2 p-2 rounded-full text-text-200 hover:bg-bg-800 active:bg-bg-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
           aria-label="Dismiss notification"
           style={{ pointerEvents: "auto" }}
         >

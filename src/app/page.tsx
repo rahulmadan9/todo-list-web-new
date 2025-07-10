@@ -1,12 +1,18 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import Toast, { ToastType } from "./components/Toast";
 import { Trash2, GripVertical } from "lucide-react";
-import AuthForm from "./components/AuthForm";
+// import AuthForm from "./components/AuthForm"; // Removed - auth is handled via /auth page
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut, User } from "firebase/auth";
 import { loadUserTasks, addUserTask, updateUserTask, deleteUserTask, toggleUserTask, Task } from "./lib/firestore";
+import { useLocalStorage } from "./hooks/useLocalStorage";
+import { useOfflineQueue } from "./hooks/useOfflineQueue";
+import { useSync } from "./hooks/useSync";
+import { getNetworkManager, type NetworkState, type NetworkInfo } from "./lib/network";
 import LoadingSpinner from "./components/LoadingSpinner";
+import { OfflineStatusIndicator } from "./components/OfflineStatusIndicator";
+import { useRouter } from "next/navigation";
 
 type Filter = "all" | "active" | "completed";
 
@@ -71,9 +77,9 @@ function CalendarDropdown({ value, onChange, onClose }: { value?: string, onChan
   return (
     <div ref={ref} className="absolute z-50 mt-2 border border-border-600 rounded-lg shadow-2 p-4 backdrop-blur bg-[rgba(20,23,32,0.85)]" style={{minWidth: 260}}>
       <div className="flex justify-between items-center mb-2">
-        <button className="text-text-200 hover:text-text-100 active:text-text-100 hover:bg-bg-800 active:bg-bg-700 px-2 py-1 rounded transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]" onClick={prevMonth}>&lt;</button>
+        <button className="text-text-200 hover:text-text-100 active:text-text-100 hover:bg-bg-800 active:bg-bg-700 px-2 py-1 rounded transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]" onClick={prevMonth}>&lt;</button>
         <span className="text-text-100 font-medium">{new Date(year, month).toLocaleString(undefined, { month: 'long', year: 'numeric' })}</span>
-        <button className="text-text-200 hover:text-text-100 active:text-text-100 hover:bg-bg-800 active:bg-bg-700 px-2 py-1 rounded transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]" onClick={nextMonth}>&gt;</button>
+        <button className="text-text-200 hover:text-text-100 active:text-text-100 hover:bg-bg-800 active:bg-bg-700 px-2 py-1 rounded transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]" onClick={nextMonth}>&gt;</button>
       </div>
       <div className="grid grid-cols-7 gap-1 text-center text-text-200 text-sm mb-1">
         {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d => <div key={d}>{d}</div>)}
@@ -86,7 +92,7 @@ function CalendarDropdown({ value, onChange, onClose }: { value?: string, onChan
           return (
             <button
               key={i+1}
-              className={`rounded-md w-8 h-8 flex items-center justify-center transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${isSelected ? 'bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700' : isToday(d) ? 'border border-brand-500 text-brand-500 hover:bg-bg-700 active:bg-bg-600' : 'hover:bg-bg-700 active:bg-bg-600 text-text-100'}`}
+              className={`rounded-md w-8 h-8 flex items-center justify-center transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${isSelected ? 'bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700' : isToday(d) ? 'border border-brand-500 text-brand-500 hover:bg-bg-700 active:bg-bg-600' : 'hover:bg-bg-800 active:bg-bg-700 text-text-100'}`}
               onClick={() => onChange(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)}
             >{i+1}</button>
           );
@@ -97,7 +103,6 @@ function CalendarDropdown({ value, onChange, onClose }: { value?: string, onChan
 }
 
 export default function HomePage() {
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [input, setInput] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -115,20 +120,319 @@ export default function HomePage() {
   const [taskRows, setTaskRows] = useState(1);
   const [editTaskRows, setEditTaskRows] = useState(1);
   const [showCreateTask, setShowCreateTask] = useState(false);
+  const [cloudTasks, setCloudTasks] = useState<Task[]>([]);
+  const [isMergingTasks, setIsMergingTasks] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const router = useRouter();
+  const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const networkManager = getNetworkManager();
+      setNetworkInfo(networkManager.getNetworkInfo());
+      const unsubscribe = networkManager.subscribe((state) => {
+        setNetworkInfo(networkManager.getNetworkInfo());
+      });
+      return unsubscribe;
+    }
+  }, []);
+
+  // Local storage hook
+  const { 
+    tasks: localTasks, 
+    loading: localTasksLoading, 
+    addTask: addLocalTask,
+    updateTask: updateLocalTask,
+    deleteTask: deleteLocalTask,
+    toggleTask: toggleLocalTask,
+    refreshTasks: refreshLocalTasks,
+    clearTasks: clearLocalTasks
+  } = useLocalStorage();
+
+  // Offline queue hook
+  const {
+    enqueueTaskCreate,
+    enqueueTaskUpdate,
+    enqueueTaskDelete
+  } = useOfflineQueue();
 
   // Track authentication state
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
+      
       if (firebaseUser) {
-        loadTasks(firebaseUser.uid);
+        // User signed in - load cloud tasks and merge with local tasks
+        await handleUserSignIn(firebaseUser.uid);
       } else {
-        setTasks([]);
+        // User signed out - clear cloud tasks and continue with local storage
+        setCloudTasks([]);
         setTasksLoading(false);
+        setIsMergingTasks(false);
+        
+        // Clear any pending operations
+        setEditingId(null);
+        setEditValue("");
+        setEditNote("");
+        setEditDueDate("");
+        setShowCreateTask(false);
+        setInput("");
+        setNoteInput("");
+        setDueDateInput("");
       }
     });
     return () => unsubscribe();
   }, []);
+
+  // Handle user sign in and task merging
+  async function handleUserSignIn(userId: string) {
+    setIsMergingTasks(true);
+    setTasksLoading(true);
+    setMergeError(null);
+    
+    try {
+      // Load cloud tasks
+      const userTasks = await loadUserTasks(userId);
+      setCloudTasks(userTasks);
+      
+      // Merge local tasks with cloud tasks
+      await mergeLocalTasksWithCloud(userTasks);
+      
+      setToast({ 
+        open: true, 
+        message: "Successfully signed in! Your tasks have been synchronized.", 
+        type: "success" 
+      });
+    } catch (error) {
+      console.error("Failed to load or merge tasks:", error);
+      const errorMessage = error instanceof Error ? error.message : "Failed to load tasks";
+      setMergeError(errorMessage);
+      setToast({ 
+        open: true, 
+        message: errorMessage, 
+        type: "error" 
+      });
+      
+      // Even if merge fails, we should still show the cloud tasks
+      // The user can retry the merge later
+    } finally {
+      setIsMergingTasks(false);
+      setTasksLoading(false);
+    }
+  }
+
+  // Retry failed merge
+  async function retryMerge() {
+    if (!user || !mergeError) return;
+    
+    setIsMergingTasks(true);
+    setMergeError(null);
+    
+    try {
+      await mergeLocalTasksWithCloud(cloudTasks);
+      setToast({ 
+        open: true, 
+        message: "Successfully merged local tasks with cloud!", 
+        type: "success" 
+      });
+    } catch (error) {
+      console.error("Failed to retry merge:", error);
+      const errorMessage = error instanceof Error ? error.message : "Failed to merge tasks";
+      setMergeError(errorMessage);
+      setToast({ 
+        open: true, 
+        message: errorMessage, 
+        type: "error" 
+      });
+    } finally {
+      setIsMergingTasks(false);
+    }
+  }
+
+  // Merge local tasks with cloud tasks - Apple Reminders style
+  async function mergeLocalTasksWithCloud(cloudTasks: Task[]) {
+    if (localTasks.length === 0) {
+      // No local tasks to merge
+      return;
+    }
+
+    // Create a map of cloud tasks by title and notes to avoid duplicates
+    const cloudTaskMap = new Map<string, Task>();
+    cloudTasks.forEach(task => {
+      const key = `${task.title.trim()}-${(task.notes || '').trim()}`;
+      cloudTaskMap.set(key, task);
+    });
+
+    // Find local tasks that don't exist in cloud
+    const tasksToUpload = localTasks.filter(localTask => {
+      const key = `${localTask.title.trim()}-${(localTask.notes || '').trim()}`;
+      return !cloudTaskMap.has(key);
+    });
+
+    if (tasksToUpload.length === 0) {
+      // No new tasks to upload, but we should still clear local tasks
+      // since they already exist in cloud (duplicates)
+      await clearLocalTasks();
+      setToast({ 
+        open: true, 
+        message: "Your tasks are already synced with your cloud account.", 
+        type: "success" 
+      });
+      return;
+    }
+
+    // Upload local tasks to cloud
+    const uploadPromises = tasksToUpload.map(localTask => 
+      addUserTask(user!.uid, {
+        title: localTask.title,
+        completed: localTask.completed,
+        createdAt: localTask.createdAt,
+        notes: localTask.notes,
+        dueDate: localTask.dueDate
+      })
+    );
+
+    try {
+      const uploadResults = await Promise.all(uploadPromises);
+      const successfulUploads = uploadResults.filter(id => id !== null).length;
+      
+      if (successfulUploads === tasksToUpload.length) {
+        // All tasks uploaded successfully - refresh cloud tasks and clear local
+        const updatedCloudTasks = await loadUserTasks(user!.uid);
+        setCloudTasks(updatedCloudTasks);
+        
+        // Clear local tasks after successful upload
+        await clearLocalTasks();
+        
+        setToast({ 
+          open: true, 
+          message: `Successfully merged ${tasksToUpload.length} local task${tasksToUpload.length > 1 ? 's' : ''} with your cloud account.`, 
+          type: "success" 
+        });
+      } else {
+        // Some tasks failed to upload
+        setToast({ 
+          open: true, 
+          message: `Partially synced: ${successfulUploads}/${tasksToUpload.length} tasks uploaded. Remaining tasks will retry later.`, 
+          type: "warning" 
+        });
+        
+        // Refresh cloud tasks but keep local tasks that failed
+        const updatedCloudTasks = await loadUserTasks(user!.uid);
+        setCloudTasks(updatedCloudTasks);
+      }
+    } catch (error) {
+      console.error("Failed to upload local tasks:", error);
+      setToast({ 
+        open: true, 
+        message: "Failed to sync local tasks with cloud. Your local tasks are still available and will sync when connection improves.", 
+        type: "error" 
+      });
+      
+      // Don't clear local tasks if upload failed
+      // The unified display will show both local and cloud tasks
+    }
+  }
+
+  // Handle user sign out - preserve local experience
+  async function handleSignOut() {
+    try {
+      // Clear any pending operations before signing out
+      setEditingId(null);
+      setEditValue("");
+      setEditNote("");
+      setEditDueDate("");
+      setShowCreateTask(false);
+      setInput("");
+      setNoteInput("");
+      setDueDateInput("");
+      
+      // Before signing out, save current cloud tasks to local storage
+      // This ensures continuity when switching between authenticated/guest modes
+      if (cloudTasks.length > 0) {
+        for (const cloudTask of cloudTasks) {
+          // Add cloud tasks to local storage if they don't exist
+          const existingLocalTask = localTasks.find(lt => 
+            lt.title.trim() === cloudTask.title.trim() && 
+            (lt.notes || '').trim() === (cloudTask.notes || '').trim()
+          );
+          
+          if (!existingLocalTask) {
+            await addLocalTask({
+              title: cloudTask.title,
+              completed: cloudTask.completed,
+              createdAt: cloudTask.createdAt,
+              notes: cloudTask.notes,
+              dueDate: cloudTask.dueDate
+            });
+          }
+        }
+      }
+      
+      await signOut(auth);
+      setCloudTasks([]);
+      setTasksLoading(false);
+      setIsMergingTasks(false);
+      
+      // Refresh local tasks to include the cloud tasks we just saved
+      await refreshLocalTasks();
+      
+      setToast({ 
+        open: true, 
+        message: "Successfully signed out. Your tasks remain available locally.", 
+        type: "info" 
+      });
+    } catch (error) {
+      console.error("Failed to sign out:", error);
+      setToast({ 
+        open: true, 
+        message: "Failed to sign out", 
+        type: "error" 
+      });
+    }
+  }
+
+  // Get the current tasks - unified approach like Apple Reminders
+  // Show combined view during sync, otherwise show appropriate store
+  const currentTasks = useMemo(() => {
+    if (user) {
+      // Authenticated user
+      if (isMergingTasks) {
+        // During merge, show combined view of both local and cloud tasks
+        const combinedTasks = [...localTasks, ...cloudTasks];
+        // Remove duplicates based on title and notes
+        const uniqueTasks = combinedTasks.reduce((acc, task) => {
+          const key = `${task.title.trim()}-${(task.notes || '').trim()}`;
+          if (!acc.find(existing => `${existing.title.trim()}-${(existing.notes || '').trim()}` === key)) {
+            acc.push(task);
+          }
+          return acc;
+        }, [] as Task[]);
+        return uniqueTasks.sort((a, b) => b.createdAt - a.createdAt);
+      } else {
+        // After successful merge or if no local tasks, show cloud tasks
+        // But also include any local tasks that failed to upload
+        if (localTasks.length > 0 && !tasksLoading) {
+          // Still have local tasks - merge them in the display
+          const combinedTasks = [...localTasks, ...cloudTasks];
+          const uniqueTasks = combinedTasks.reduce((acc, task) => {
+            const key = `${task.title.trim()}-${(task.notes || '').trim()}`;
+            if (!acc.find(existing => `${existing.title.trim()}-${(existing.notes || '').trim()}` === key)) {
+              acc.push(task);
+            }
+            return acc;
+          }, [] as Task[]);
+          return uniqueTasks.sort((a, b) => b.createdAt - a.createdAt);
+        }
+        return cloudTasks;
+      }
+    } else {
+      // Guest user - show local tasks
+      return localTasks;
+    }
+  }, [user, localTasks, cloudTasks, isMergingTasks, tasksLoading]);
+
+  const isLoadingTasks = user ? tasksLoading : localTasksLoading;
 
   // Focus input when creating a new task
   useEffect(() => {
@@ -137,23 +441,7 @@ export default function HomePage() {
     }
   }, [showCreateTask]);
 
-  // Load tasks from Firestore
-  async function loadTasks(userId: string) {
-    setTasksLoading(true);
-    try {
-      const userTasks = await loadUserTasks(userId);
-      setTasks(userTasks);
-    } catch (error) {
-      console.error("Failed to load tasks:", error);
-      setToast({ 
-        open: true, 
-        message: error instanceof Error ? error.message : "Failed to load tasks", 
-        type: "error" 
-      });
-    } finally {
-      setTasksLoading(false);
-    }
-  }
+
 
   // Check if task creation should be allowed
   function canCreateTask() {
@@ -187,7 +475,7 @@ export default function HomePage() {
   async function addTask(e: React.FormEvent) {
     e.preventDefault();
     const title = input.trim();
-    if (!title || !user) return;
+    if (!title) return;
     
     try {
       const taskData = {
@@ -198,20 +486,59 @@ export default function HomePage() {
         dueDate: dueDateInput || undefined
       };
       
-      const taskId = await addUserTask(user.uid, taskData);
-      if (taskId) {
-        // Add to local state for immediate feedback
-        setTasks(prev => [{ id: taskId, ...taskData }, ...prev]);
-        setInput("");
-        setNoteInput("");
-        setDueDateInput("");
-        setTaskRows(1);
-        inputRef.current?.focus();
-        setToast({ open: true, message: "Task added!", type: "success" });
+      if (user) {
+        // Authenticated user - try cloud first, fallback to offline queue
+        
+        if (networkInfo?.isOnline && networkInfo?.canSync) {
+          // Online - save to cloud
+          const taskId = await addUserTask(user.uid, taskData);
+          if (taskId) {
+            // Add to cloud tasks state
+            const newTask: Task = {
+              ...taskData,
+              id: taskId
+            };
+            setCloudTasks(prev => [newTask, ...prev]);
+            setToast({ open: true, message: "Task added!", type: "success" });
+          } else {
+            setToast({ open: true, message: "Failed to add task", type: "error" });
+          }
+        } else {
+          // Offline or poor connection - queue for later
+          enqueueTaskCreate(taskData, user.uid, 'normal');
+          
+          // Also save to local storage for immediate feedback
+          const localTaskId = await addLocalTask(taskData);
+          
+          if (localTaskId) {
+            setToast({ 
+              open: true, 
+              message: networkInfo?.isOnline 
+                ? "Task added! Will sync when connection improves." 
+                : "Task added! Will sync when back online.", 
+              type: "success" 
+            });
+          } else {
+            setToast({ open: true, message: "Failed to add task", type: "error" });
+          }
+        }
       } else {
-        setToast({ open: true, message: "Failed to add task", type: "error" });
+        // Non-authenticated user - save to local storage only
+        const taskId = await addLocalTask(taskData);
+        if (taskId) {
+          setToast({ open: true, message: "Task added!", type: "success" });
+        } else {
+          setToast({ open: true, message: "Failed to add task", type: "error" });
+        }
       }
-    } catch {
+      
+      setInput("");
+      setNoteInput("");
+      setDueDateInput("");
+      setTaskRows(1);
+      inputRef.current?.focus();
+    } catch (error) {
+      console.error("Error adding task:", error);
       setToast({ open: true, message: "Failed to add task", type: "error" });
     }
   }
@@ -297,54 +624,141 @@ export default function HomePage() {
     }
   }
 
-  // Toggle task completion
+  // Toggle task completion - unified approach
   async function toggleTask(id: string) {
-    if (!user) return;
-    
-    const task = tasks.find(t => t.id === id);
-    if (!task) return;
-    
-    // Optimistic update
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
-    
     try {
-      const success = await toggleUserTask(user.uid, id, !task.completed);
-      if (!success) {
-        // Revert on failure
-        setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: task.completed } : t));
-        setToast({ open: true, message: "Failed to update task", type: "error" });
+      const task = currentTasks.find(t => t.id === id);
+      if (!task) return;
+      
+      // Determine which store this task belongs to
+      const isLocalTask = localTasks.find(t => t.id === id);
+      const isCloudTask = cloudTasks.find(t => t.id === id);
+      
+      if (user) {
+        // Authenticated user
+        if (isCloudTask && networkInfo?.isOnline && networkInfo?.canSync) {
+          // Task exists in cloud and we're online - update cloud
+          const success = await toggleUserTask(user.uid, id, !task.completed);
+          if (success) {
+            setCloudTasks(prev => prev.map(t => 
+              t.id === id ? { ...t, completed: !t.completed } : t
+            ));
+            setToast({ 
+              open: true, 
+              message: task.completed ? "Task marked as incomplete" : "Task completed!", 
+              type: "success" 
+            });
+          } else {
+            setToast({ open: true, message: "Failed to update task", type: "error" });
+          }
+        } else if (isLocalTask) {
+          // Task exists locally (either offline or not yet synced)
+          const success = await toggleLocalTask(id, !task.completed);
+          if (success) {
+            // If we're online but this is a local task, queue it for cloud sync
+            if (networkInfo?.isOnline && networkInfo?.canSync) {
+              enqueueTaskUpdate(id, { completed: !task.completed }, user.uid, 'normal');
+            }
+            
+            setToast({ 
+              open: true, 
+              message: networkInfo?.isOnline && networkInfo?.canSync
+                ? "Task updated and synced!" 
+                : networkInfo?.isOnline 
+                  ? "Task updated! Will sync when connection improves." 
+                  : "Task updated! Will sync when back online.", 
+              type: "success" 
+            });
+          } else {
+            setToast({ open: true, message: "Failed to update task", type: "error" });
+          }
+        } else {
+          // Fallback - queue for later sync
+          enqueueTaskUpdate(id, { completed: !task.completed }, user.uid, 'normal');
+          setToast({ 
+            open: true, 
+            message: "Task update queued for sync.", 
+            type: "success" 
+          });
+        }
+      } else {
+        // Guest user - update local storage only
+        const success = await toggleLocalTask(id, !task.completed);
+        if (success) {
+          setToast({ 
+            open: true, 
+            message: "Task updated!", 
+            type: "success" 
+          });
+        } else {
+          setToast({ open: true, message: "Failed to update task", type: "error" });
+        }
       }
-    } catch {
-      // Revert on failure
-      setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: task.completed } : t));
+    } catch (error) {
+      console.error("Error toggling task:", error);
       setToast({ open: true, message: "Failed to update task", type: "error" });
     }
   }
 
-  // Delete a task
+  // Delete a task - unified approach
   async function deleteTask(id: string) {
-    if (!user) return;
-    
-    // Optimistic update
-    const taskToDelete = tasks.find(t => t.id === id);
-    setTasks(prev => prev.filter(t => t.id !== id));
-    
     try {
-      const success = await deleteUserTask(user.uid, id);
-      if (success) {
-        setToast({ open: true, message: "Task deleted.", type: "info" });
-      } else {
-        // Revert on failure
-        if (taskToDelete) {
-          setTasks(prev => [...prev, taskToDelete]);
+      // Determine which store this task belongs to
+      const isLocalTask = localTasks.find(t => t.id === id);
+      const isCloudTask = cloudTasks.find(t => t.id === id);
+      
+      if (user) {
+        // Authenticated user
+        if (isCloudTask && networkInfo?.isOnline && networkInfo?.canSync) {
+          // Task exists in cloud and we're online - delete from cloud
+          const success = await deleteUserTask(user.uid, id);
+          if (success) {
+            setCloudTasks(prev => prev.filter(t => t.id !== id));
+            setToast({ open: true, message: "Task deleted.", type: "info" });
+          } else {
+            setToast({ open: true, message: "Failed to delete task", type: "error" });
+          }
+        } else if (isLocalTask) {
+          // Task exists locally (either offline or not yet synced)
+          const success = await deleteLocalTask(id);
+          if (success) {
+            // If we're online but this is a local task, queue it for cloud sync
+            if (networkInfo?.isOnline && networkInfo?.canSync) {
+              enqueueTaskDelete(id, user.uid, 'high');
+            }
+            
+            setToast({ 
+              open: true, 
+              message: networkInfo?.isOnline && networkInfo?.canSync
+                ? "Task deleted and synced!" 
+                : networkInfo?.isOnline 
+                  ? "Task deleted! Will sync when connection improves." 
+                  : "Task deleted! Will sync when back online.", 
+              type: "info" 
+            });
+          } else {
+            setToast({ open: true, message: "Failed to delete task", type: "error" });
+          }
+        } else {
+          // Fallback - queue for later sync
+          enqueueTaskDelete(id, user.uid, 'high');
+          setToast({ 
+            open: true, 
+            message: "Task deletion queued for sync.", 
+            type: "info" 
+          });
         }
-        setToast({ open: true, message: "Failed to delete task", type: "error" });
+      } else {
+        // Guest user - delete from local storage only
+        const success = await deleteLocalTask(id);
+        if (success) {
+          setToast({ open: true, message: "Task deleted.", type: "info" });
+        } else {
+          setToast({ open: true, message: "Failed to delete task", type: "error" });
+        }
       }
-    } catch {
-      // Revert on failure
-      if (taskToDelete) {
-        setTasks(prev => [...prev, taskToDelete]);
-      }
+    } catch (error) {
+      console.error("Error deleting task:", error);
       setToast({ open: true, message: "Failed to delete task", type: "error" });
     }
   }
@@ -358,10 +772,8 @@ export default function HomePage() {
     setEditTaskRows(Math.max(1, task.title.split('\n').length));
   }
 
-  // Add function to save edit
+  // Save edit - unified approach
   async function saveEdit(id: string) {
-    if (!user) return;
-    
     try {
       const updates = {
         title: editValue,
@@ -369,25 +781,90 @@ export default function HomePage() {
         dueDate: editDueDate || undefined
       };
       
-      const success = await updateUserTask(user.uid, id, updates);
-      if (success) {
-        setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-        setEditingId(null);
-        setEditValue("");
-        setEditNote("");
-        setEditDueDate("");
-        setEditTaskRows(1);
-        setToast({ open: true, message: "Task updated!", type: "success" });
+      // Determine which store this task belongs to
+      const isLocalTask = localTasks.find(t => t.id === id);
+      const isCloudTask = cloudTasks.find(t => t.id === id);
+      
+      if (user) {
+        // Authenticated user
+        if (isCloudTask && networkInfo?.isOnline && networkInfo?.canSync) {
+          // Task exists in cloud and we're online - update cloud
+          const success = await updateUserTask(user.uid, id, updates);
+          if (success) {
+            setCloudTasks(prev => prev.map(t => 
+              t.id === id ? { ...t, ...updates } : t
+            ));
+            setEditingId(null);
+            setEditValue("");
+            setEditNote("");
+            setEditDueDate("");
+            setEditTaskRows(1);
+            setToast({ open: true, message: "Task updated!", type: "success" });
+          } else {
+            setToast({ open: true, message: "Failed to update task", type: "error" });
+          }
+        } else if (isLocalTask) {
+          // Task exists locally (either offline or not yet synced)
+          const success = await updateLocalTask(id, updates);
+          if (success) {
+            // If we're online but this is a local task, queue it for cloud sync
+            if (networkInfo?.isOnline && networkInfo?.canSync) {
+              enqueueTaskUpdate(id, updates, user.uid, 'normal');
+            }
+            
+            setEditingId(null);
+            setEditValue("");
+            setEditNote("");
+            setEditDueDate("");
+            setEditTaskRows(1);
+            setToast({ 
+              open: true, 
+              message: networkInfo?.isOnline && networkInfo?.canSync
+                ? "Task updated and synced!" 
+                : networkInfo?.isOnline 
+                  ? "Task updated! Will sync when connection improves." 
+                  : "Task updated! Will sync when back online.", 
+              type: "success" 
+            });
+          } else {
+            setToast({ open: true, message: "Failed to update task", type: "error" });
+          }
+        } else {
+          // Fallback - queue for later sync
+          enqueueTaskUpdate(id, updates, user.uid, 'normal');
+          setEditingId(null);
+          setEditValue("");
+          setEditNote("");
+          setEditDueDate("");
+          setEditTaskRows(1);
+          setToast({ 
+            open: true, 
+            message: "Task update queued for sync.", 
+            type: "success" 
+          });
+        }
       } else {
-        setToast({ open: true, message: "Failed to update task", type: "error" });
+        // Guest user - update local storage only
+        const success = await updateLocalTask(id, updates);
+        if (success) {
+          setEditingId(null);
+          setEditValue("");
+          setEditNote("");
+          setEditDueDate("");
+          setEditTaskRows(1);
+          setToast({ open: true, message: "Task updated!", type: "success" });
+        } else {
+          setToast({ open: true, message: "Failed to update task", type: "error" });
+        }
       }
-    } catch {
+    } catch (error) {
+      console.error("Error saving edit:", error);
       setToast({ open: true, message: "Failed to update task", type: "error" });
     }
   }
 
   // Filtered tasks
-  const filteredTasks = tasks.filter(t => {
+  const filteredTasks = currentTasks.filter(t => {
     if (filter === "all") return true;
     if (filter === "active") return !t.completed;
     if (filter === "completed") return t.completed;
@@ -401,13 +878,14 @@ export default function HomePage() {
   function onDrop(e: React.DragEvent<HTMLLIElement>, id: string) {
     const draggedId = e.dataTransfer.getData("text/plain");
     if (draggedId === id) return;
-    const draggedIdx = tasks.findIndex(t => t.id === draggedId);
-    const dropIdx = tasks.findIndex(t => t.id === id);
+    const draggedIdx = currentTasks.findIndex(t => t.id === draggedId);
+    const dropIdx = currentTasks.findIndex(t => t.id === id);
     if (draggedIdx === -1 || dropIdx === -1) return;
-    const newTasks = [...tasks];
+    const newTasks = [...currentTasks];
     const [draggedTask] = newTasks.splice(draggedIdx, 1);
     newTasks.splice(dropIdx, 0, draggedTask);
-    setTasks(newTasks);
+    // TODO: Update local storage with new order
+    // For now, we'll implement this in the next section
   }
 
   // Roving tabindex for accessibility
@@ -445,20 +923,70 @@ export default function HomePage() {
   }
   const groupedTasks = groupTasksByDueDate(filteredTasks);
 
-  if (!user) {
-    return <AuthForm onAuth={() => {}} />;
+  // Show loading state while tasks are loading or merging
+  if (isLoadingTasks || isMergingTasks) {
+    return (
+      <div className="min-h-screen bg-bg-900 flex flex-col items-center justify-center py-16 px-4">
+        <div className="flex flex-col items-center gap-4">
+          <LoadingSpinner size="lg" className="text-brand-500" />
+          <div className="text-text-200">
+            {isMergingTasks ? "Syncing tasks..." : "Loading tasks..."}
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="min-h-screen bg-bg-900 flex flex-col items-center py-16 px-4" dir="auto">
       <div className="w-full max-w-xl">
-        <div className="flex justify-end mb-4">
-          <button
-            onClick={() => signOut(auth)}
-            className="px-4 py-2 rounded bg-bg-700 text-text-200 hover:bg-bg-800 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
-          >
-            Sign Out
-          </button>
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex-1">
+            {mergeError && user && (
+              <div className="flex items-center gap-2 text-sm text-state-error bg-bg-800 border border-state-error rounded-lg px-3 py-2">
+                <span>⚠️ {mergeError}</span>
+                <button
+                  onClick={retryMerge}
+                  disabled={isMergingTasks}
+                  className="text-brand-500 hover:underline disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  {isMergingTasks ? "Retrying..." : "Retry"}
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Offline Status Indicator */}
+            {user && (
+              <OfflineStatusIndicator 
+                userId={user.uid}
+                onQueueProcess={() => {
+                  setToast({ 
+                    open: true, 
+                    message: "Pending actions processed successfully!", 
+                    type: "success" 
+                  });
+                }}
+              />
+            )}
+            
+            {/* Auth Buttons */}
+            {user ? (
+              <button
+                onClick={handleSignOut}
+                className="px-4 py-2 rounded-md border border-border-600 text-text-100 hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm font-medium transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+              >
+                Sign Out
+              </button>
+            ) : (
+              <button
+                onClick={() => router.push('/auth')}
+                className="px-4 py-2 rounded-md bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm font-medium transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+              >
+                Sign In
+              </button>
+            )}
+          </div>
         </div>
         <h1 className="text-4xl font-semibold mb-8 text-text-100 tracking-tight" style={{letterSpacing: '-0.25px'}}>To-Do List</h1>
         
@@ -467,7 +995,7 @@ export default function HomePage() {
           <div className="mb-8">
             <button
               onClick={startCreateTask}
-              className="w-full flex items-center justify-center gap-3 bg-bg-800 hover:bg-bg-700 active:bg-bg-600 border border-border-600 rounded-lg shadow-2 p-6 text-text-200 hover:text-text-100 font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500"
+              className="w-full flex items-center justify-center gap-3 bg-transparent hover:bg-bg-700 active:bg-bg-600 border border-border-600 rounded-lg shadow-2 p-6 text-text-200 hover:text-text-100 font-medium transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500"
               aria-label="Create a new task"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -524,7 +1052,7 @@ export default function HomePage() {
                 <div className="relative flex flex-wrap gap-2 mt-3">
                   <button
                     type="button"
-                    className="flex items-center gap-1 px-4 py-2 rounded-full bg-bg-900 border border-border-600 text-text-100 text-base font-medium cursor-pointer hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                    className="flex items-center gap-1 px-4 py-2 rounded-full bg-transparent border border-border-600 text-text-100 text-base font-medium cursor-pointer hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
                     onClick={() => setShowCalendar(true)}
                   >
                     {dueDateInput
@@ -561,10 +1089,10 @@ export default function HomePage() {
                 <div className="flex gap-2 mt-4">
                   <button 
                     type="submit" 
-                    className={`px-4 py-2 rounded-md font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 ${
+                    className={`px-4 py-2 rounded-md font-medium transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 ${
                       canCreateTask() 
                         ? "bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700" 
-                        : "bg-bg-600 text-text-300 cursor-not-allowed opacity-50"
+                        : "bg-bg-700 text-text-300 cursor-not-allowed opacity-50"
                     }`}
                     disabled={!canCreateTask()}
                   >
@@ -573,7 +1101,7 @@ export default function HomePage() {
                   <button 
                     type="button" 
                     onClick={cancelCreateTask}
-                    className="px-4 py-2 rounded-md bg-bg-700 text-text-200 border border-border-600 hover:bg-bg-600 active:bg-bg-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                    className="px-4 py-2 rounded-md bg-transparent text-text-200 border border-border-600 hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
                   >
                     Cancel
                   </button>
@@ -587,7 +1115,7 @@ export default function HomePage() {
           {(["all", "active", "completed"] as Filter[]).map(f => (
             <button
               key={f}
-              className={`px-4 py-2 rounded-full font-medium text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${filter === f ? "bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700" : "bg-bg-800 text-text-200 hover:bg-bg-700 active:bg-bg-600 border border-border-600"}`}
+              className={`px-4 py-2 rounded-full font-medium text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${filter === f ? "bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700" : "text-text-200 hover:bg-bg-800 active:bg-bg-700"}`}
               onClick={() => setFilter(f)}
               aria-pressed={filter === f}
               style={{fontFamily: 'var(--font-sans)'}}
@@ -597,7 +1125,7 @@ export default function HomePage() {
           ))}
         </div>
         <ol className="space-y-6" aria-label="Task list">
-          {tasksLoading && (
+          {isLoadingTasks && (
             <li className="flex justify-center py-16">
               <div className="flex flex-col items-center gap-4">
                 <LoadingSpinner size="lg" className="text-brand-500" />
@@ -605,13 +1133,13 @@ export default function HomePage() {
               </div>
             </li>
           )}
-          {!tasksLoading && groupedTasks.length === 0 && (
+          {!isLoadingTasks && groupedTasks.length === 0 && (
             <li className="flex flex-col items-center justify-center py-16 bg-bg-800 rounded-lg shadow-2 text-text-200 text-lg font-medium select-none">
               <span className="mb-2">Add your first task</span>
               <span className="text-sm text-text-300">Stay organized and productive</span>
             </li>
           )}
-          {!tasksLoading && groupedTasks.map(group => (
+          {!isLoadingTasks && groupedTasks.map(group => (
             <li key={group.key}>
               <div className="mb-2 text-accent-amber font-semibold text-base">{group.key}</div>
               <ol className="space-y-3">
@@ -682,7 +1210,7 @@ export default function HomePage() {
                           <div className="relative flex flex-wrap gap-2 mt-3">
                             <button
                               type="button"
-                              className="flex items-center gap-1 px-4 py-2 rounded-full bg-bg-900 border border-border-600 text-text-100 text-base font-medium cursor-pointer hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                              className="flex items-center gap-1 px-4 py-2 rounded-full bg-transparent border border-border-600 text-text-100 text-base font-medium cursor-pointer hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
                               onClick={() => setShowEditCalendar(task.id)}
                             >
                               {editDueDate
@@ -715,18 +1243,16 @@ export default function HomePage() {
                             )}
                           </div>
                           <div className="flex gap-2 mt-4">
-                            <button type="submit" className="px-4 py-2 rounded-md bg-brand-500 text-bg-900 font-medium hover:bg-brand-600 active:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]">Save</button>
-                            <button type="button" onClick={() => setEditingId(null)} className="px-4 py-2 rounded-md bg-bg-700 text-text-200 border border-border-600 hover:bg-bg-600 active:bg-bg-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]">Cancel</button>
+                            <button type="submit" className="px-4 py-2 rounded-md bg-brand-500 text-bg-900 font-medium hover:bg-brand-600 active:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]">Save</button>
+                            <button type="button" onClick={() => setEditingId(null)} className="px-4 py-2 rounded-md bg-transparent text-text-200 border border-border-600 hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]">Cancel</button>
                           </div>
                         </div>
                         {/* Delete button in edit mode */}
                         <button
                           type="button"
                           onClick={() => deleteTask(task.id)}
-                          className="ml-2 px-3 py-1 rounded-full bg-transparent text-state-error hover:bg-state-error hover:text-bg-900 active:bg-red-600 active:text-bg-900 focus:outline-none focus:ring-2 focus:ring-state-error focus:ring-offset-2 focus:ring-offset-bg-900 text-sm font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                          className="ml-2 p-2 rounded-full text-text-200 hover:bg-state-error hover:text-text-100 active:brightness-90 focus:outline-none focus:ring-2 focus:ring-state-error focus:ring-offset-2 focus:ring-offset-bg-800 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
                           aria-label="Delete task"
-                          style={{fontFamily: 'var(--font-sans)'}}
-                          tabIndex={0}
                         >
                           <Trash2 className="w-5 h-5" aria-hidden="true" />
                         </button>
@@ -754,19 +1280,17 @@ export default function HomePage() {
                         )}
                         <button
                           onClick={() => deleteTask(task.id)}
-                          className="ml-2 px-3 py-1 rounded-full bg-transparent text-state-error hover:bg-state-error hover:text-bg-900 active:bg-red-600 active:text-bg-900 focus:outline-none focus:ring-2 focus:ring-state-error focus:ring-offset-2 focus:ring-offset-bg-900 text-sm font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] relative group"
+                          className="ml-2 p-2 rounded-full text-text-200 opacity-0 group-hover:opacity-100 hover:bg-state-error hover:text-text-100 active:brightness-90 focus:outline-none focus:ring-2 focus:ring-state-error focus:ring-offset-2 focus:ring-offset-bg-800 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
                           aria-label="Delete task"
-                          style={{fontFamily: 'var(--font-sans)'}}
-                          tabIndex={0}
                         >
                           <Trash2 className="w-5 h-5" aria-hidden="true" />
                         </button>
                         <button
                           onClick={() => startEdit(task)}
-                          className={`ml-2 px-3 py-1 rounded-full text-sm font-medium transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500 ${
+                          className={`ml-2 px-3 py-1 rounded-full text-sm font-medium transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500 ${
                             editingId !== null 
                               ? "bg-bg-800 text-text-300 border border-border-600 cursor-not-allowed opacity-50" 
-                              : "bg-bg-700 text-text-200 border border-border-600 hover:bg-bg-600 active:bg-bg-500"
+                              : "bg-transparent text-text-200 border border-border-600 hover:bg-bg-700 active:bg-bg-600"
                           }`}
                           aria-label="Edit task"
                           tabIndex={0}

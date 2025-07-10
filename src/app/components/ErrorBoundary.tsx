@@ -46,14 +46,14 @@ export default class ErrorBoundary extends Component<Props, State> {
             <div className="space-y-4">
               <button
                 onClick={() => window.location.reload()}
-                className="w-full bg-brand-500 text-bg-900 font-medium py-3 px-6 rounded-lg hover:bg-brand-600 active:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                className="w-full bg-brand-500 text-bg-900 font-medium py-3 px-6 rounded-lg hover:bg-brand-600 active:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
               >
                 Refresh Page
               </button>
               
               <button
                 onClick={() => this.setState({ hasError: false, error: undefined })}
-                className="w-full bg-bg-700 text-text-200 font-medium py-3 px-6 rounded-lg border border-border-600 hover:bg-bg-600 active:bg-bg-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-all duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+                className="w-full bg-transparent text-text-200 font-medium py-3 px-6 rounded-lg border border-border-600 hover:bg-bg-700 active:bg-bg-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-900 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
               >
                 Try Again
               </button>
