@@ -8,10 +8,11 @@ import { onAuthStateChanged, signOut, User } from "firebase/auth";
 import { loadUserTasks, addUserTask, updateUserTask, deleteUserTask, toggleUserTask, Task } from "./lib/firestore";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { useOfflineQueue } from "./hooks/useOfflineQueue";
-import { useSync } from "./hooks/useSync";
-import { getNetworkManager, type NetworkState, type NetworkInfo } from "./lib/network";
+// Removed useSync - sync now happens automatically via NetworkReconnectionHandler
+import { getNetworkManager, type NetworkInfo } from "./lib/network";
 import LoadingSpinner from "./components/LoadingSpinner";
-import { OfflineStatusIndicator } from "./components/OfflineStatusIndicator";
+// Removed OfflineStatusIndicator - sync now happens seamlessly in background
+import { getReconnectionHandler } from "./lib/networkReconnection";
 import { useRouter } from "next/navigation";
 
 type Filter = "all" | "active" | "completed";
@@ -130,12 +131,43 @@ export default function HomePage() {
     if (typeof window !== 'undefined') {
       const networkManager = getNetworkManager();
       setNetworkInfo(networkManager.getNetworkInfo());
-      const unsubscribe = networkManager.subscribe((state) => {
+      const unsubscribe = networkManager.subscribe(() => {
         setNetworkInfo(networkManager.getNetworkInfo());
       });
       return unsubscribe;
     }
   }, []);
+
+  // Initialize automatic sync handler for seamless background syncing
+  useEffect(() => {
+    if (typeof window !== 'undefined' && user) {
+      getReconnectionHandler({
+        autoProcessQueue: true,
+        showNotifications: false, // We'll handle notifications via toast
+        retryAttempts: 3,
+        retryDelay: 2000,
+        onQueueProcess: (success, count) => {
+          if (success && count > 0) {
+            setToast({
+              open: true,
+              message: `Synced ${count} task${count > 1 ? 's' : ''}`,
+              type: "success"
+            });
+          } else if (!success && count > 0) {
+            setToast({
+              open: true,
+              message: "Some tasks couldn't be saved. We'll keep trying.",
+              type: "warning"
+            });
+          }
+        }
+      });
+
+      return () => {
+        // Cleanup happens automatically via singleton pattern
+      };
+    }
+  }, [user]);
 
   // Local storage hook
   const { 
@@ -513,9 +545,7 @@ export default function HomePage() {
           if (localTaskId) {
             setToast({ 
               open: true, 
-              message: networkInfo?.isOnline 
-                ? "Task added! Will sync when connection improves." 
-                : "Task added! Will sync when back online.", 
+              message: "Task added!", 
               type: "success" 
             });
           } else {
@@ -662,11 +692,7 @@ export default function HomePage() {
             
             setToast({ 
               open: true, 
-              message: networkInfo?.isOnline && networkInfo?.canSync
-                ? "Task updated and synced!" 
-                : networkInfo?.isOnline 
-                  ? "Task updated! Will sync when connection improves." 
-                  : "Task updated! Will sync when back online.", 
+              message: "Task updated!", 
               type: "success" 
             });
           } else {
@@ -729,11 +755,7 @@ export default function HomePage() {
             
             setToast({ 
               open: true, 
-              message: networkInfo?.isOnline && networkInfo?.canSync
-                ? "Task deleted and synced!" 
-                : networkInfo?.isOnline 
-                  ? "Task deleted! Will sync when connection improves." 
-                  : "Task deleted! Will sync when back online.", 
+              message: "Task deleted.", 
               type: "info" 
             });
           } else {
@@ -819,11 +841,7 @@ export default function HomePage() {
             setEditTaskRows(1);
             setToast({ 
               open: true, 
-              message: networkInfo?.isOnline && networkInfo?.canSync
-                ? "Task updated and synced!" 
-                : networkInfo?.isOnline 
-                  ? "Task updated! Will sync when connection improves." 
-                  : "Task updated! Will sync when back online.", 
+              message: "Task updated!", 
               type: "success" 
             });
           } else {
@@ -956,20 +974,6 @@ export default function HomePage() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            {/* Offline Status Indicator */}
-            {user && (
-              <OfflineStatusIndicator 
-                userId={user.uid}
-                onQueueProcess={() => {
-                  setToast({ 
-                    open: true, 
-                    message: "Pending actions processed successfully!", 
-                    type: "success" 
-                  });
-                }}
-              />
-            )}
-            
             {/* Auth Buttons */}
             {user ? (
               <button
