@@ -21,12 +21,22 @@ service cloud.firestore {
              (data.get('dueDate', null) == null || data.dueDate is string);
     }
     
+    function isValidTaskUpdate() {
+      let data = request.resource.data;
+      let keys = data.keys();
+      
+      // Allow order-only updates for reordering
+      return (keys.hasOnly(['order']) && data.order is number) ||
+             isValidTask();
+    }
+    
     // Users can only access their own tasks
     match /users/{userId}/tasks/{taskId} {
       allow read, delete: if isAuthenticated() && isOwner(userId);
       allow create: if isAuthenticated() && isOwner(userId) && isValidTask();
-      allow update: if isAuthenticated() && isOwner(userId) && isValidTask() &&
-                    request.resource.data.createdAt == resource.data.createdAt;
+      allow update: if isAuthenticated() && isOwner(userId) && isValidTaskUpdate() &&
+                    (request.resource.data.keys().hasOnly(['order']) || 
+                     request.resource.data.createdAt == resource.data.createdAt);
     }
     
     // Deny access to all other documents

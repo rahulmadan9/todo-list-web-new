@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 No dedicated test scripts are configured. Tests are run via:
 - Hook files: `src/app/hooks/useSync.test.ts`
 - Library tests: `src/app/lib/sync.test.ts`, `src/app/lib/network.test.ts`
+- Manual testing for drag and drop functionality
 
 ## Project Architecture
 
@@ -24,6 +25,7 @@ No dedicated test scripts are configured. Tests are run via:
 - **Backend/Database**: Firebase (Firestore + Auth)
 - **State Management**: Custom React hooks with local storage fallback
 - **Icons**: Lucide React
+- **Drag & Drop**: HTML5 Drag and Drop API with React DnD patterns
 
 ### Core Architecture Patterns
 
@@ -33,41 +35,42 @@ No dedicated test scripts are configured. Tests are run via:
 
 **Offline-First Design**: Built around network resilience:
 - Tasks work fully offline via localStorage
-- Network detection with automatic queue processing
+- Network detection with automatic queue processing via NetworkReconnectionHandler
 - Optimistic updates with rollback on failures
-- Conflict resolution for synchronization
+- Background synchronization without user-facing sync indicators
+- Seamless reconnection handling when network is restored
 
-**Task Synchronization**: Sophisticated sync system in `src/app/lib/sync.ts`:
-- Duplicate detection with confidence scoring
-- Automatic conflict resolution for high-confidence matches
-- Smart merging strategies for task properties
-- Progress tracking and error handling
+**Task Synchronization**: Simplified sync system with background processing:
+- Automatic synchronization via NetworkReconnectionHandler
+- Offline queue processing when network is available
+- Retry logic with exponential backoff for failed operations
+- Silent sync operations to maintain seamless user experience
 
 ### Key Directories
 
 **`src/app/`** - Main application directory
-- `page.tsx` - Main todo list interface (~1200 lines, contains calendar, task management, auth integration)
+- `page.tsx` - Main todo list interface with drag & drop, calendar, task management, auth integration
 - `firebase.ts` - Firebase configuration and initialization
 - `layout.tsx` - Root layout with font setup
+- `auth/` - Authentication pages and components
 
 **`src/app/components/`** - Reusable UI components
-- `AuthForm.tsx` - Authentication forms (sign in/up)
-- `Toast.tsx` - Notification system
-- `LoadingSpinner.tsx` - Loading states
-- `*StatusIndicator.tsx` - Network and sync status components
-- `ConflictResolver.tsx` - Handle sync conflicts
+- `Toast.tsx` - Notification system with multiple types
+- `LoadingSpinner.tsx` - SVG-based loading spinner
+- Removed: AuthForm, StatusIndicators, ConflictResolver (simplified architecture)
 
 **`src/app/hooks/`** - Custom React hooks
 - `useLocalStorage.ts` - Local storage operations for tasks
 - `useOfflineQueue.ts` - Queue management for offline actions
-- `useSync.ts` - Task synchronization between local and cloud
+- Removed: useSync (replaced with automatic background sync)
 
 **`src/app/lib/`** - Core business logic
-- `firestore.ts` - Firebase operations with retry logic and validation
-- `sync.ts` - Advanced synchronization algorithms and conflict resolution
+- `firestore.ts` - Firebase operations with retry logic, validation, and task ordering
 - `localStorage.ts` - Local storage utilities
 - `network.ts` - Network detection and connection quality assessment
 - `offlineQueue.ts` - Queue processing for offline operations
+- `networkReconnection.ts` - Background network reconnection and sync handling
+- Removed: sync.ts (replaced with simpler background sync)
 
 ### Design System Implementation
 
@@ -86,7 +89,7 @@ The app follows a comprehensive dark-theme design system defined in `Design_Syst
 
 **Local Storage Hook**: `useLocalStorage` provides CRUD operations with error handling
 **Offline Queue Hook**: `useOfflineQueue` manages pending actions when offline
-**Sync Hook**: `useSync` orchestrates synchronization with progress tracking and conflict resolution
+**Network Reconnection Handler**: Automatic background synchronization without user-facing indicators
 
 Tasks flow through these layers:
 1. UI action → Optimistic local update
@@ -97,9 +100,11 @@ Tasks flow through these layers:
 ### Network Architecture
 
 **Connection Management**: 
-- Real-time network state tracking
+- Real-time network state tracking via NetworkManager
 - Connection quality assessment (can sync vs basic connectivity)
 - Automatic retry mechanisms with exponential backoff
+- Background reconnection handling via NetworkReconnectionHandler
+- Silent sync operations to maintain seamless UX
 
 **Firebase Integration**:
 - Authentication via email/password
@@ -110,10 +115,16 @@ Tasks flow through these layers:
 ### Key Features
 
 **Task Management**: Full CRUD with rich editing (multi-line support, due dates, notes)
-**Drag & Drop**: Reordering with visual feedback (implementation in progress)
+**Drag & Drop**: Complete implementation with:
+  - HTML5 Drag and Drop API integration
+  - Visual drag handles and drop zones
+  - Smooth animations and transitions
+  - Custom drag previews showing full task cards
+  - Automatic reordering with proper spacing
+  - Touch-friendly mobile support
 **Calendar Integration**: Custom calendar component with date selection
 **Responsive Design**: Mobile-first with accessible interactions
-**Authentication**: Optional sign-in with local storage fallback
+**Authentication**: Optional sign-in via dedicated /auth route with local storage fallback
 
 ## Development Guidelines
 
@@ -122,6 +133,8 @@ Tasks flow through these layers:
 - New components go in `src/app/components/`
 - Business logic belongs in `src/app/lib/`
 - Custom hooks in `src/app/hooks/`
+- Authentication pages in `src/app/auth/`
+- Drag and drop logic integrated directly in main page component
 
 ### Code Style
 - Follow existing TypeScript patterns
@@ -138,6 +151,8 @@ Tasks flow through these layers:
 - Use environment variables for configuration (with fallbacks for development)
 - All Firestore operations include retry logic and validation
 - Security rules located in `firestore.rules`
+- Task ordering system using `order` field with automatic migration
+- Batch operations for efficient task reordering
 
 ## Important Patterns
 
@@ -145,3 +160,9 @@ Tasks flow through these layers:
 **Error Recovery**: Failed operations show toast messages with retry options
 **Progressive Enhancement**: App works without authentication, enhances with cloud sync
 **Accessibility**: Comprehensive ARIA labeling, keyboard navigation, screen reader support
+**Drag & Drop Patterns**: 
+  - Draggable items with proper ARIA attributes
+  - Visual feedback during drag operations
+  - Smooth animations using CSS transitions
+  - Touch event handling for mobile devices
+  - Proper cleanup of event listeners

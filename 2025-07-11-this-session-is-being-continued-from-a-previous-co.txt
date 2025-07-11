@@ -1,0 +1,19 @@
+╭───────────────────────────────────────────────────────────────────╮
+│ ✻ Welcome to Claude Code!                                         │
+│                                                                   │
+│   /help for help, /status for your current setup                  │
+│                                                                   │
+│   cwd: /Users/rahulmadan/Documents/Cursor projects/todo-list-web  │
+╰───────────────────────────────────────────────────────────────────╯
+
+⏺ Compact summary (ctrl+r to expand)
+  ⎿  Read .next/server/pages/_document.js (1 lines)
+  ⎿  Read src/app/page.tsx (100+ lines)
+  ⎿  Read src/app/lib/firestore.ts (263 lines)
+  ⎿ Read ../../../../../var/folders/gs/_tll7fd17y1dm8d9mlq3h94r0000gn/T/TemporaryItems/NSIRD_screencaptureui_EYWWq8/S
+    creenshot 2025-07-11 at 1.04.52 AM.png (132.5KB)
+  ⎿  Todo list read (5 items)
+
+> /compact 
+  ⎿  Compacted. ctrl+r to see full summary
+

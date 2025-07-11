@@ -5,7 +5,7 @@ import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "fire
 export default function AuthForm({ onClose }: { onClose: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [isLogin, setIsLogin] = useState(true);
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -14,7 +14,7 @@ export default function AuthForm({ onClose }: { onClose: () => void }) {
     setLoading(true);
     setError(null);
     try {
-      if (isLogin) {
+      if (mode === 'signin') {
         await signInWithEmailAndPassword(auth, email, password);
       } else {
         await createUserWithEmailAndPassword(auth, email, password);
@@ -29,54 +29,85 @@ export default function AuthForm({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-bg-900 bg-opacity-50 flex items-center justify-center z-50">
-      <div className="max-w-sm mx-auto bg-bg-800 p-6 rounded-lg shadow-2 border border-border-600">
-        <div className="flex justify-between items-center mb-4">
-          <button
-            onClick={onClose}
-            className="text-text-300 hover:text-text-100 active:text-brand-500 text-sm font-medium transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
-          >
-            ← Back to Tasks
-          </button>
-          <h2 className="text-2xl font-semibold text-text-100">
-            {isLogin ? "Login" : "Sign Up"}
-          </h2>
-          <div className="w-20"></div> {/* Spacer for centering */}
+    <div className="max-w-md w-full">
+      <div className="text-center mb-12">
+        <h1 className="text-4xl font-bold text-text-100 mb-4">Welcome</h1>
+        <p className="text-text-300 text-lg">Sign in to sync your tasks across devices</p>
+      </div>
+      
+      <div className="bg-bg-800 rounded-xl shadow-2xl p-10">
+        <div className="space-y-8">
+          
+          <form onSubmit={handleSubmit} className="space-y-8">
+            <div className="space-y-6">
+              <div>
+                <label htmlFor="email" className="block text-sm font-medium text-text-200 mb-3">
+                  Email
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full px-4 py-3 bg-bg-700 border border-border-600 rounded-lg text-text-100 placeholder-text-300 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-all duration-200"
+                  placeholder="Enter your email"
+                />
+              </div>
+              
+              <div>
+                <label htmlFor="password" className="block text-sm font-medium text-text-200 mb-3">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full px-4 py-3 bg-bg-700 border border-border-600 rounded-lg text-text-100 placeholder-text-300 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-all duration-200"
+                  placeholder="Enter your password"
+                />
+              </div>
+            </div>
+            
+            {error && (
+              <div className="p-3 bg-state-error/10 border border-state-error/20 rounded-lg">
+                <div className="text-state-error text-sm text-center">{error}</div>
+              </div>
+            )}
+            
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-4 px-6 bg-brand-500 text-bg-900 rounded-lg font-semibold hover:bg-brand-600 active:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+            >
+              {loading ? 'Loading...' : (mode === 'signin' ? 'Sign In' : 'Sign Up')}
+            </button>
+          </form>
+          
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
+              className="text-text-300 hover:text-brand-500 active:text-brand-600 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] text-sm font-medium"
+            >
+              {mode === 'signin' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
+            </button>
+          </div>
         </div>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            required
-            className="px-4 py-2 rounded border border-border-600 bg-bg-900 text-text-100 focus:outline-none focus:ring-2 focus:ring-brand-500"
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            required
-            className="px-4 py-2 rounded border border-border-600 bg-bg-900 text-text-100 focus:outline-none focus:ring-2 focus:ring-brand-500"
-          />
-          {error && <div className="text-state-error text-sm text-center">{error}</div>}
-          <button
-            type="submit"
-            className="bg-brand-500 text-bg-900 font-medium px-4 py-2 rounded-md hover:bg-brand-600 active:bg-brand-700 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-bg-800 disabled:opacity-60"
-            disabled={loading}
-          >
-            {loading ? (isLogin ? "Logging in..." : "Signing up...") : (isLogin ? "Login" : "Sign Up")}
-          </button>
-        </form>
-        <div className="mt-4 text-center">
-          <button
-            className="text-brand-500 hover:underline active:text-brand-700 text-sm transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
-            onClick={() => setIsLogin(l => !l)}
-          >
-            {isLogin ? "Don't have an account? Sign Up" : "Already have an account? Login"}
-          </button>
-        </div>
+      </div>
+      
+      <div className="text-center mt-8">
+        <button 
+          onClick={onClose}
+          className="inline-flex items-center text-text-300 hover:text-brand-500 active:text-brand-600 transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] text-sm font-medium"
+        >
+          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+          Continue without signing in
+        </button>
       </div>
     </div>
   );

@@ -35,7 +35,9 @@ function validateTask(task: any): task is Task {
     (task.notes === undefined || 
      (typeof task.notes === 'string' && task.notes.length <= 2000)) &&
     (task.dueDate === undefined || 
-     (typeof task.dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(task.dueDate)))
+     (typeof task.dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(task.dueDate))) &&
+    (task.order === undefined || 
+     (typeof task.order === 'number' && task.order >= 0))
   );
 }
 
@@ -53,14 +55,15 @@ function validateAndCleanTasks(tasks: any[]): Task[] {
     const task = tasks[i];
     
     if (validateTask(task)) {
-      // Clean the task data
+      // Clean the task data and assign order if missing
       const cleanTask: Task = {
         id: task.id.trim(),
         title: task.title.trim(),
         completed: task.completed,
         createdAt: task.createdAt,
         notes: task.notes?.trim() || undefined,
-        dueDate: task.dueDate || undefined
+        dueDate: task.dueDate || undefined,
+        order: task.order !== undefined ? task.order : task.createdAt || Date.now()
       };
       validTasks.push(cleanTask);
     } else {
@@ -155,9 +158,19 @@ export function saveLocalTasks(tasks: Task[]): boolean {
 export function addLocalTask(taskData: Omit<Task, 'id'>): string | null {
   try {
     const tasks = getLocalTasks();
+    
+    // Assign order value if not provided - add to the end of existing tasks
+    let orderValue = taskData.order;
+    if (orderValue === undefined || orderValue === null) {
+      const maxOrder = tasks.reduce((max, task) => 
+        Math.max(max, task.order || 0), 0);
+      orderValue = maxOrder + 1000;
+    }
+    
     const newTask: Task = {
       ...taskData,
-      id: `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      id: `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      order: orderValue
     };
     
     // Check quota before adding
@@ -166,7 +179,9 @@ export function addLocalTask(taskData: Omit<Task, 'id'>): string | null {
       console.warn('localStorage usage is high (>90%)');
     }
     
-    tasks.unshift(newTask); // Add to beginning of array
+    // Add task and maintain order-based sorting
+    tasks.push(newTask);
+    tasks.sort((a, b) => (a.order || 0) - (b.order || 0));
     const success = saveLocalTasks(tasks);
     
     return success ? newTask.id : null;
@@ -300,5 +315,29 @@ export function getLocalStorageUsage(): { used: number; available: number } | nu
     return { used, available };
   } catch {
     return null;
+  }
+}
+
+// Reorder tasks by updating their order values
+export function reorderLocalTasks(taskIds: string[]): boolean {
+  try {
+    const tasks = getLocalTasks();
+    
+    // Update order values for the specified tasks
+    const updatedTasks = tasks.map(task => {
+      const newIndex = taskIds.indexOf(task.id);
+      if (newIndex !== -1) {
+        return { ...task, order: (newIndex + 1) * 1000 };
+      }
+      return task;
+    });
+    
+    // Sort by new order values
+    updatedTasks.sort((a, b) => (a.order || 0) - (b.order || 0));
+    
+    return saveLocalTasks(updatedTasks);
+  } catch (error) {
+    console.error('Error reordering local tasks:', error);
+    return false;
   }
 } 

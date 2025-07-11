@@ -2,13 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { Task } from '../lib/firestore';
 import { 
   getLocalTasks, 
-  saveLocalTasks, 
   addLocalTask, 
   updateLocalTask, 
-  deleteLocalTask, 
-  toggleLocalTask,
+  deleteLocalTask,
   getLocalStorageUsage,
-  clearLocalTasks
+  clearLocalTasks,
+  reorderLocalTasks
 } from '../lib/localStorage';
 
 interface UseLocalStorageReturn {
@@ -19,6 +18,7 @@ interface UseLocalStorageReturn {
   updateTask: (taskId: string, updates: Partial<Omit<Task, 'id'>>) => Promise<boolean>;
   deleteTask: (taskId: string) => Promise<boolean>;
   toggleTask: (taskId: string, completed: boolean) => Promise<boolean>;
+  reorderTasks: (taskIds: string[]) => Promise<boolean>;
   refreshTasks: () => void;
   clearTasks: () => Promise<boolean>;
   storageUsage: { used: number; available: number } | null;
@@ -160,6 +160,37 @@ export function useLocalStorage(): UseLocalStorageReturn {
     }
   }, []);
 
+  // Reorder tasks in localStorage
+  const reorderTasks = useCallback(async (taskIds: string[]): Promise<boolean> => {
+    try {
+      setError(null);
+      const success = reorderLocalTasks(taskIds);
+      
+      if (success) {
+        // Update local state immediately for optimistic UI
+        const reorderedTasks = taskIds.map((id, index) => {
+          const task = tasks.find(t => t.id === id);
+          return task ? { ...task, order: (index + 1) * 1000 } : null;
+        }).filter(Boolean) as Task[];
+        
+        // Include tasks that weren't reordered
+        const nonReorderedTasks = tasks.filter(t => !taskIds.includes(t.id));
+        const allTasks = [...reorderedTasks, ...nonReorderedTasks];
+        allTasks.sort((a, b) => (a.order || 0) - (b.order || 0));
+        
+        setTasks(allTasks);
+        return true;
+      } else {
+        setError('Failed to reorder tasks');
+        return false;
+      }
+    } catch (err) {
+      setError('Failed to reorder tasks');
+      console.error('Error reordering tasks:', err);
+      return false;
+    }
+  }, [tasks]);
+
   return {
     tasks,
     loading,
@@ -168,6 +199,7 @@ export function useLocalStorage(): UseLocalStorageReturn {
     updateTask,
     deleteTask,
     toggleTask,
+    reorderTasks,
     refreshTasks,
     clearTasks,
     storageUsage

@@ -1,11 +1,11 @@
 "use client";
-import { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import Toast, { ToastType } from "./components/Toast";
 import { Trash2, GripVertical } from "lucide-react";
 // import AuthForm from "./components/AuthForm"; // Removed - auth is handled via /auth page
 import { auth } from "./firebase";
 import { onAuthStateChanged, signOut, User } from "firebase/auth";
-import { loadUserTasks, addUserTask, updateUserTask, deleteUserTask, toggleUserTask, Task } from "./lib/firestore";
+import { loadUserTasks, addUserTask, updateUserTask, deleteUserTask, toggleUserTask, reorderUserTasks, Task } from "./lib/firestore";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { useOfflineQueue } from "./hooks/useOfflineQueue";
 // Removed useSync - sync now happens automatically via NetworkReconnectionHandler
@@ -177,6 +177,7 @@ export default function HomePage() {
     updateTask: updateLocalTask,
     deleteTask: deleteLocalTask,
     toggleTask: toggleLocalTask,
+    reorderTasks: reorderLocalTasks,
     refreshTasks: refreshLocalTasks,
     clearTasks: clearLocalTasks
   } = useLocalStorage();
@@ -216,6 +217,29 @@ export default function HomePage() {
     return () => unsubscribe();
   }, []);
 
+  // Handle Firebase errors consistently
+  function handleFirebaseError(error: unknown, operation: string): string {
+    console.error(`Firebase error in ${operation}:`, error);
+    
+    if (error instanceof Error) {
+      if (error.message.includes("Missing or insufficient permissions")) {
+        // Force re-authentication for permission errors
+        auth.signOut().catch(signOutError => {
+          console.error("Error signing out:", signOutError);
+        });
+        return "Authentication required. Please sign in again.";
+      } else if (error.message.includes("offline")) {
+        return "You're offline. Changes will sync when you reconnect.";
+      } else if (error.message.includes("network")) {
+        return "Network error. Please check your connection and try again.";
+      } else {
+        return error.message;
+      }
+    }
+    
+    return `Failed to ${operation}`;
+  }
+
   // Handle user sign in and task merging
   async function handleUserSignIn(userId: string) {
     setIsMergingTasks(true);
@@ -236,8 +260,7 @@ export default function HomePage() {
         type: "success" 
       });
     } catch (error) {
-      console.error("Failed to load or merge tasks:", error);
-      const errorMessage = error instanceof Error ? error.message : "Failed to load tasks";
+      const errorMessage = handleFirebaseError(error, "load tasks");
       setMergeError(errorMessage);
       setToast({ 
         open: true, 
@@ -440,7 +463,18 @@ export default function HomePage() {
           }
           return acc;
         }, [] as Task[]);
-        return uniqueTasks.sort((a, b) => b.createdAt - a.createdAt);
+        return uniqueTasks.sort((a, b) => {
+          // Sort by order first, then by createdAt for backward compatibility
+          if (a.order !== undefined && b.order !== undefined) {
+            return a.order - b.order;
+          } else if (a.order !== undefined) {
+            return -1; // Tasks with order come first
+          } else if (b.order !== undefined) {
+            return 1; // Tasks with order come first
+          } else {
+            return b.createdAt - a.createdAt; // Fallback to creation time (newest first)
+          }
+        });
       } else {
         // After successful merge or if no local tasks, show cloud tasks
         // But also include any local tasks that failed to upload
@@ -454,7 +488,18 @@ export default function HomePage() {
             }
             return acc;
           }, [] as Task[]);
-          return uniqueTasks.sort((a, b) => b.createdAt - a.createdAt);
+          return uniqueTasks.sort((a, b) => {
+            // Sort by order first, then by createdAt for backward compatibility
+            if (a.order !== undefined && b.order !== undefined) {
+              return a.order - b.order;
+            } else if (a.order !== undefined) {
+              return -1; // Tasks with order come first
+            } else if (b.order !== undefined) {
+              return 1; // Tasks with order come first
+            } else {
+              return b.createdAt - a.createdAt; // Fallback to creation time (newest first)
+            }
+          });
         }
         return cloudTasks;
       }
@@ -523,17 +568,26 @@ export default function HomePage() {
         
         if (networkInfo?.isOnline && networkInfo?.canSync) {
           // Online - save to cloud
-          const taskId = await addUserTask(user.uid, taskData);
-          if (taskId) {
-            // Add to cloud tasks state
-            const newTask: Task = {
-              ...taskData,
-              id: taskId
-            };
-            setCloudTasks(prev => [newTask, ...prev]);
-            setToast({ open: true, message: "Task added!", type: "success" });
-          } else {
-            setToast({ open: true, message: "Failed to add task", type: "error" });
+          try {
+            const taskId = await addUserTask(user.uid, taskData);
+            if (taskId) {
+              // Add to cloud tasks state
+              const newTask: Task = {
+                ...taskData,
+                id: taskId
+              };
+              setCloudTasks(prev => [newTask, ...prev]);
+              setToast({ open: true, message: "Task added!", type: "success" });
+            } else {
+              setToast({ open: true, message: "Failed to add task", type: "error" });
+            }
+          } catch (error) {
+            const errorMessage = handleFirebaseError(error, "add task");
+            setToast({ open: true, message: errorMessage, type: "error" });
+            
+            // Fallback to offline queue
+            await enqueueTaskCreate(taskData);
+            setToast({ open: true, message: "Task queued for sync", type: "info" });
           }
         } else {
           // Offline or poor connection - queue for later
@@ -668,18 +722,27 @@ export default function HomePage() {
         // Authenticated user
         if (isCloudTask && networkInfo?.isOnline && networkInfo?.canSync) {
           // Task exists in cloud and we're online - update cloud
-          const success = await toggleUserTask(user.uid, id, !task.completed);
-          if (success) {
-            setCloudTasks(prev => prev.map(t => 
-              t.id === id ? { ...t, completed: !t.completed } : t
-            ));
-            setToast({ 
-              open: true, 
-              message: task.completed ? "Task marked as incomplete" : "Task completed!", 
-              type: "success" 
-            });
-          } else {
-            setToast({ open: true, message: "Failed to update task", type: "error" });
+          try {
+            const success = await toggleUserTask(user.uid, id, !task.completed);
+            if (success) {
+              setCloudTasks(prev => prev.map(t => 
+                t.id === id ? { ...t, completed: !t.completed } : t
+              ));
+              setToast({ 
+                open: true, 
+                message: task.completed ? "Task marked as incomplete" : "Task completed!", 
+                type: "success" 
+              });
+            } else {
+              setToast({ open: true, message: "Failed to update task", type: "error" });
+            }
+          } catch (error) {
+            const errorMessage = handleFirebaseError(error, "update task");
+            setToast({ open: true, message: errorMessage, type: "error" });
+            
+            // Fallback to offline queue
+            enqueueTaskUpdate(id, { completed: !task.completed }, user.uid, 'normal');
+            setToast({ open: true, message: "Update queued for sync", type: "info" });
           }
         } else if (isLocalTask) {
           // Task exists locally (either offline or not yet synced)
@@ -737,12 +800,21 @@ export default function HomePage() {
         // Authenticated user
         if (isCloudTask && networkInfo?.isOnline && networkInfo?.canSync) {
           // Task exists in cloud and we're online - delete from cloud
-          const success = await deleteUserTask(user.uid, id);
-          if (success) {
-            setCloudTasks(prev => prev.filter(t => t.id !== id));
-            setToast({ open: true, message: "Task deleted.", type: "info" });
-          } else {
-            setToast({ open: true, message: "Failed to delete task", type: "error" });
+          try {
+            const success = await deleteUserTask(user.uid, id);
+            if (success) {
+              setCloudTasks(prev => prev.filter(t => t.id !== id));
+              setToast({ open: true, message: "Task deleted.", type: "info" });
+            } else {
+              setToast({ open: true, message: "Failed to delete task", type: "error" });
+            }
+          } catch (error) {
+            const errorMessage = handleFirebaseError(error, "delete task");
+            setToast({ open: true, message: errorMessage, type: "error" });
+            
+            // Fallback to offline queue
+            enqueueTaskDelete(id, user.uid, 'normal');
+            setToast({ open: true, message: "Delete queued for sync", type: "info" });
           }
         } else if (isLocalTask) {
           // Task exists locally (either offline or not yet synced)
@@ -811,19 +883,28 @@ export default function HomePage() {
         // Authenticated user
         if (isCloudTask && networkInfo?.isOnline && networkInfo?.canSync) {
           // Task exists in cloud and we're online - update cloud
-          const success = await updateUserTask(user.uid, id, updates);
-          if (success) {
-            setCloudTasks(prev => prev.map(t => 
-              t.id === id ? { ...t, ...updates } : t
-            ));
-            setEditingId(null);
-            setEditValue("");
-            setEditNote("");
-            setEditDueDate("");
-            setEditTaskRows(1);
-            setToast({ open: true, message: "Task updated!", type: "success" });
-          } else {
-            setToast({ open: true, message: "Failed to update task", type: "error" });
+          try {
+            const success = await updateUserTask(user.uid, id, updates);
+            if (success) {
+              setCloudTasks(prev => prev.map(t => 
+                t.id === id ? { ...t, ...updates } : t
+              ));
+              setEditingId(null);
+              setEditValue("");
+              setEditNote("");
+              setEditDueDate("");
+              setEditTaskRows(1);
+              setToast({ open: true, message: "Task updated!", type: "success" });
+            } else {
+              setToast({ open: true, message: "Failed to update task", type: "error" });
+            }
+          } catch (error) {
+            const errorMessage = handleFirebaseError(error, "update task");
+            setToast({ open: true, message: errorMessage, type: "error" });
+            
+            // Fallback to offline queue
+            enqueueTaskUpdate(id, updates, user.uid, 'normal');
+            setToast({ open: true, message: "Update queued for sync", type: "info" });
           }
         } else if (isLocalTask) {
           // Task exists locally (either offline or not yet synced)
@@ -889,21 +970,211 @@ export default function HomePage() {
     return true;
   });
 
-  // Drag and drop reordering
-  function onDragStart(e: React.DragEvent<HTMLLIElement>, id: string) {
-    e.dataTransfer.setData("text/plain", id);
+  // Drag and drop state
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [dropPosition, setDropPosition] = useState<'above' | 'below' | null>(null);
+  const [isDragActive, setIsDragActive] = useState(false);
+
+  // Refs for drag and drop
+  const taskRefs = useRef<Map<string, HTMLElement>>(new Map());
+
+  // Set task ref for drag functionality
+  function setTaskRef(taskId: string, element: HTMLElement | null) {
+    if (element) {
+      taskRefs.current.set(taskId, element);
+    } else {
+      taskRefs.current.delete(taskId);
+    }
   }
-  function onDrop(e: React.DragEvent<HTMLLIElement>, id: string) {
+
+  // Drag and drop reordering
+  function onDragStart(e: React.DragEvent<HTMLSpanElement>, id: string) {
+    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.effectAllowed = "move";
+    setDraggedTaskId(id);
+    setIsDragActive(true);
+    
+    // Get the entire task card element for the drag image
+    const taskElement = taskRefs.current.get(id);
+    const dragHandle = e.currentTarget;
+    
+    if (taskElement && dragHandle) {
+      try {
+        // Calculate click position relative to the drag handle (GripVertical icon)
+        const taskRect = taskElement.getBoundingClientRect();
+        const handleRect = dragHandle.getBoundingClientRect();
+        
+        // Calculate offset from the drag handle to maintain original click position
+        const offsetX = handleRect.left - taskRect.left + (handleRect.width / 2);
+        const offsetY = handleRect.top - taskRect.top + (handleRect.height / 2);
+        
+        // Create a clone of the task for the drag image
+        const clone = taskElement.cloneNode(true) as HTMLElement;
+        clone.style.transform = 'rotate(3deg)';
+        clone.style.opacity = '0.9';
+        clone.style.width = taskElement.offsetWidth + 'px';
+        clone.style.maxWidth = taskElement.offsetWidth + 'px';
+        clone.style.border = '2px solid rgba(45, 212, 191, 0.5)';
+        clone.style.boxShadow = '0 10px 25px rgba(45, 212, 191, 0.3)';
+        
+        // Temporarily add clone to the DOM for drag image
+        clone.style.position = 'absolute';
+        clone.style.top = '-1000px';
+        clone.style.left = '-1000px';
+        clone.style.pointerEvents = 'none';
+        clone.style.zIndex = '1000';
+        document.body.appendChild(clone);
+        
+        // Set as drag image with proper offset to prevent jumping
+        e.dataTransfer.setDragImage(clone, offsetX, offsetY);
+        
+        // Clean up clone after drag starts
+        setTimeout(() => {
+          if (document.body.contains(clone)) {
+            document.body.removeChild(clone);
+          }
+        }, 0);
+      } catch (error) {
+        // Fallback to default drag image if there's an error
+        console.warn('Error setting custom drag image:', error);
+      }
+    }
+  }
+
+  function onDragEnd() {
+    setDraggedTaskId(null);
+    setDropTargetId(null);
+    setDropPosition(null);
+    setIsDragActive(false);
+  }
+
+  function onDragOver(e: React.DragEvent<HTMLLIElement>) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }
+
+  function onDragEnter(e: React.DragEvent<HTMLLIElement>, id: string) {
+    e.preventDefault();
+    if (draggedTaskId && draggedTaskId !== id) {
+      // Use requestAnimationFrame for smooth state updates
+      requestAnimationFrame(() => {
+        setDropTargetId(id);
+        
+        // Determine if we're dropping above or below based on mouse position
+        const currentTarget = e.currentTarget;
+        if (currentTarget) {
+          const rect = currentTarget.getBoundingClientRect();
+          const middle = rect.top + rect.height / 2;
+          setDropPosition(e.clientY < middle ? 'above' : 'below');
+        }
+      });
+    }
+  }
+
+  function onDragLeave(e: React.DragEvent<HTMLLIElement>) {
+    e.preventDefault();
+    // Only clear drop target if we're leaving the task item itself
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      // Use requestAnimationFrame for smooth state updates
+      requestAnimationFrame(() => {
+        setDropTargetId(null);
+        setDropPosition(null);
+      });
+    }
+  }
+
+  async function onDrop(e: React.DragEvent<HTMLLIElement>, dropId: string) {
+    e.preventDefault();
     const draggedId = e.dataTransfer.getData("text/plain");
-    if (draggedId === id) return;
-    const draggedIdx = currentTasks.findIndex(t => t.id === draggedId);
-    const dropIdx = currentTasks.findIndex(t => t.id === id);
-    if (draggedIdx === -1 || dropIdx === -1) return;
-    const newTasks = [...currentTasks];
-    const [draggedTask] = newTasks.splice(draggedIdx, 1);
-    newTasks.splice(dropIdx, 0, draggedTask);
-    // TODO: Update local storage with new order
-    // For now, we'll implement this in the next section
+    
+    if (draggedId === dropId) {
+      setDraggedTaskId(null);
+      setDropTargetId(null);
+      setDropPosition(null);
+      setIsDragActive(false);
+      return;
+    }
+
+    try {
+      const draggedIdx = currentTasks.findIndex(t => t.id === draggedId);
+      const dropIdx = currentTasks.findIndex(t => t.id === dropId);
+      
+      if (draggedIdx === -1 || dropIdx === -1) return;
+
+      // Create reordered task list with position-aware insertion
+      const newTasks = [...currentTasks];
+      const [draggedTask] = newTasks.splice(draggedIdx, 1);
+      
+      // Calculate insertion index based on drop position
+      let insertIdx = dropIdx;
+      if (draggedIdx < dropIdx) {
+        // If dragging down, adjust for the removed item
+        insertIdx = dropPosition === 'above' ? dropIdx - 1 : dropIdx;
+      } else {
+        // If dragging up
+        insertIdx = dropPosition === 'above' ? dropIdx : dropIdx + 1;
+      }
+      
+      newTasks.splice(insertIdx, 0, draggedTask);
+      const reorderedTaskIds = newTasks.map(task => task.id);
+
+      // Update order in appropriate storage
+      if (user) {
+        // Authenticated user - determine which storage to use
+        const isLocalTask = localTasks.find(t => t.id === draggedId);
+        const isCloudTask = cloudTasks.find(t => t.id === draggedId);
+        
+        if (isCloudTask && networkInfo?.isOnline && networkInfo?.canSync) {
+          // Update cloud storage
+          try {
+            const success = await reorderUserTasks(user.uid, reorderedTaskIds);
+            if (success) {
+              // Update cloud tasks state to reflect new order
+              const updatedCloudTasks = newTasks.filter(t => cloudTasks.find(ct => ct.id === t.id));
+              setCloudTasks(updatedCloudTasks);
+              setToast({ open: true, message: "Tasks reordered!", type: "success" });
+            } else {
+              setToast({ open: true, message: "Failed to reorder tasks", type: "error" });
+            }
+          } catch (error) {
+            const errorMessage = handleFirebaseError(error, "reorder tasks");
+            setToast({ open: true, message: errorMessage, type: "error" });
+            
+            // For reordering, we can't easily fall back to offline queue
+            // So we'll just show the error and let the user try again
+          }
+        } else if (isLocalTask) {
+          // Update local storage
+          const success = await reorderLocalTasks(reorderedTaskIds);
+          if (success) {
+            // Queue for cloud sync if online
+            if (networkInfo?.isOnline && networkInfo?.canSync) {
+              // Note: We'll handle this in the queue system later
+            }
+            setToast({ open: true, message: "Tasks reordered!", type: "success" });
+          } else {
+            setToast({ open: true, message: "Failed to reorder tasks", type: "error" });
+          }
+        }
+      } else {
+        // Guest user - update local storage only
+        const success = await reorderLocalTasks(reorderedTaskIds);
+        if (success) {
+          setToast({ open: true, message: "Tasks reordered!", type: "success" });
+        } else {
+          setToast({ open: true, message: "Failed to reorder tasks", type: "error" });
+        }
+      }
+    } catch (error) {
+      console.error("Error reordering tasks:", error);
+      setToast({ open: true, message: "Failed to reorder tasks", type: "error" });
+    } finally {
+      setDraggedTaskId(null);
+      setDropTargetId(null);
+      setDropPosition(null);
+      setIsDragActive(false);
+    }
   }
 
   // Roving tabindex for accessibility
@@ -1128,7 +1399,14 @@ export default function HomePage() {
             </button>
           ))}
         </div>
-        <ol className="space-y-6" aria-label="Task list">
+        <ol className="space-y-6 relative" aria-label="Task list" style={{
+          /* Constrain drag area to task list */
+          isolation: 'isolate',
+          overflow: 'visible',
+          minHeight: '200px',
+          paddingTop: '8px',
+          paddingBottom: '8px'
+        }}>
           {isLoadingTasks && (
             <li className="flex justify-center py-16">
               <div className="flex flex-col items-center gap-4">
@@ -1146,30 +1424,49 @@ export default function HomePage() {
           {!isLoadingTasks && groupedTasks.map(group => (
             <li key={group.key}>
               <div className="mb-2 text-accent-amber font-semibold text-base">{group.key}</div>
-              <ol className="space-y-3">
+              <ol className={`transition-all duration-300 ease-out ${isDragActive ? 'space-y-4' : 'space-y-3'}`}>
                 {group.tasks.map((task, idx) => (
-                  <li
-                    key={task.id}
-                    className={`${editingId === task.id 
-                      ? "bg-bg-800 min-h-[56px] rounded-lg shadow-2 p-4 border border-border-600" 
-                      : "flex items-center gap-3 bg-bg-800 min-h-[56px] rounded-lg shadow-2 px-4 py-3 group transition-all cursor-move"
-                    }`}
-                    draggable={editingId !== task.id}
-                    onDragStart={editingId !== task.id ? e => onDragStart(e, task.id) : undefined}
-                    onDragOver={e => e.preventDefault()}
-                    onDrop={e => onDrop(e, task.id)}
-                    tabIndex={focusedIdx === idx ? 0 : -1}
-                    aria-label={task.title}
-                    onFocus={() => setFocusedIdx(idx)}
-                    onKeyDown={e => {
-                      if (e.key === "ArrowDown" && idx < group.tasks.length - 1) {
-                        setFocusedIdx(idx + 1);
-                      } else if (e.key === "ArrowUp" && idx > 0) {
-                        setFocusedIdx(idx - 1);
-                      }
-                    }}
-                    dir="auto"
-                  >
+                  <React.Fragment key={task.id}>
+                    {/* Drop zone indicator above task */}
+                    {isDragActive && dropTargetId === task.id && dropPosition === 'above' && (
+                      <li className="h-1 bg-brand-500 rounded-full mx-4 shadow-lg shadow-brand-500/50 transition-all duration-300 ease-out relative">
+                        <div className="absolute inset-0 bg-brand-500 rounded-full animate-pulse"></div>
+                        <div className="absolute inset-0 bg-brand-500/30 rounded-full scale-150 animate-ping"></div>
+                      </li>
+                    )}
+                    
+                    <li
+                      ref={(el) => setTaskRef(task.id, el)}
+                      className={`${editingId === task.id 
+                        ? "bg-bg-800 min-h-[56px] rounded-lg shadow-2 p-4 border border-border-600" 
+                        : `flex items-center gap-3 bg-bg-800 min-h-[56px] rounded-lg shadow-2 px-4 py-3 group transition-all duration-300 ease-out ${
+                            draggedTaskId === task.id 
+                              ? 'opacity-30 scale-[0.98] blur-sm' 
+                              : dropTargetId === task.id && dropPosition 
+                                ? `scale-[1.02] shadow-xl border-2 border-brand-500/30 ${
+                                    dropPosition === 'above' 
+                                      ? 'translate-y-4 mb-4' 
+                                      : '-translate-y-4 mt-4'
+                                  }` 
+                                : ''
+                          }`
+                      }`}
+                      onDragOver={onDragOver}
+                      onDragEnter={e => onDragEnter(e, task.id)}
+                      onDragLeave={onDragLeave}
+                      onDrop={e => onDrop(e, task.id)}
+                      tabIndex={focusedIdx === idx ? 0 : -1}
+                      aria-label={task.title}
+                      onFocus={() => setFocusedIdx(idx)}
+                      onKeyDown={e => {
+                        if (e.key === "ArrowDown" && idx < group.tasks.length - 1) {
+                          setFocusedIdx(idx + 1);
+                        } else if (e.key === "ArrowUp" && idx > 0) {
+                          setFocusedIdx(idx - 1);
+                        }
+                      }}
+                      dir="auto"
+                    >
                     {editingId === task.id ? (
                       <form
                         onSubmit={e => { e.preventDefault(); saveEdit(task.id); }}
@@ -1302,12 +1599,32 @@ export default function HomePage() {
                         >
                           Edit
                         </button>
-                        <span className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity" aria-hidden="true">
-                          <GripVertical className="w-5 h-5 text-text-300" />
+                        <span 
+                          className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing select-none" 
+                          draggable={editingId === null}
+                          onDragStart={editingId === null ? e => onDragStart(e, task.id) : undefined}
+                          onDragEnd={onDragEnd}
+                          aria-label="Drag to reorder task"
+                          title="Drag to reorder"
+                          style={{
+                            touchAction: 'none',
+                            userSelect: 'none'
+                          }}
+                        >
+                          <GripVertical className="w-5 h-5 text-text-300 hover:text-text-100 transition-colors" />
                         </span>
                       </>
                     )}
                   </li>
+                  
+                  {/* Drop zone indicator below task */}
+                  {isDragActive && dropTargetId === task.id && dropPosition === 'below' && (
+                    <li className="h-1 bg-brand-500 rounded-full mx-4 shadow-lg shadow-brand-500/50 transition-all duration-300 ease-out relative">
+                      <div className="absolute inset-0 bg-brand-500 rounded-full animate-pulse"></div>
+                      <div className="absolute inset-0 bg-brand-500/30 rounded-full scale-150 animate-ping"></div>
+                    </li>
+                  )}
+                  </React.Fragment>
                 ))}
               </ol>
             </li>
