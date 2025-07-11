@@ -14,94 +14,9 @@ import LoadingSpinner from "./components/LoadingSpinner";
 // Removed OfflineStatusIndicator - sync now happens seamlessly in background
 import { getReconnectionHandler } from "./lib/networkReconnection";
 import { useRouter } from "next/navigation";
+import CalendarDropdown from "./components/CalendarDropdown";
 
 type Filter = "all" | "active" | "completed";
-
-// Calendar helpers
-function getDaysInMonth(year: number, month: number) {
-  return new Date(year, month + 1, 0).getDate();
-}
-function getFirstDayOfWeek(year: number, month: number) {
-  return new Date(year, month, 1).getDay();
-}
-function isToday(date: Date) {
-  const now = new Date();
-  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-}
-
-// Calendar dropdown component
-function CalendarDropdown({ value, onChange, onClose }: { value?: string, onChange: (date: string) => void, onClose: () => void }) {
-  const today = new Date();
-  const [month, setMonth] = useState(value ? new Date(value).getMonth() : today.getMonth());
-  const [year, setYear] = useState(value ? new Date(value).getFullYear() : today.getFullYear());
-  useEffect(() => {
-    if (value) {
-      const d = new Date(value);
-      setMonth(d.getMonth());
-      setYear(d.getFullYear());
-    } else {
-      const currentDate = new Date();
-      setMonth(currentDate.getMonth());
-      setYear(currentDate.getFullYear());
-    }
-  }, [value]);
-  const daysInMonth = getDaysInMonth(year, month);
-  const firstDay = getFirstDayOfWeek(year, month);
-  const selected = value ? new Date(value) : undefined;
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        onClose();
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [onClose]);
-  function prevMonth() {
-    if (month === 0) {
-      setMonth(11);
-      setYear(y => y - 1);
-    } else {
-      setMonth(m => m - 1);
-    }
-  }
-  function nextMonth() {
-    if (month === 11) {
-      setMonth(0);
-      setYear(y => y + 1);
-    } else {
-      setMonth(m => m + 1);
-    }
-  }
-
-  return (
-    <div ref={ref} className="absolute z-50 mt-2 border border-border-600 rounded-lg shadow-2 p-4 backdrop-blur bg-[rgba(20,23,32,0.85)]" style={{minWidth: 260}}>
-      <div className="flex justify-between items-center mb-2">
-        <button className="text-text-200 hover:text-text-100 active:text-text-100 hover:bg-bg-800 active:bg-bg-700 px-2 py-1 rounded transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]" onClick={prevMonth}>&lt;</button>
-        <span className="text-text-100 font-medium">{new Date(year, month).toLocaleString(undefined, { month: 'long', year: 'numeric' })}</span>
-        <button className="text-text-200 hover:text-text-100 active:text-text-100 hover:bg-bg-800 active:bg-bg-700 px-2 py-1 rounded transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)]" onClick={nextMonth}>&gt;</button>
-      </div>
-      <div className="grid grid-cols-7 gap-1 text-center text-text-200 text-sm mb-1">
-        {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d => <div key={d}>{d}</div>)}
-      </div>
-      <div className="grid grid-cols-7 gap-1">
-        {Array(firstDay).fill(null).map((_, i) => <div key={"empty-"+i}></div>)}
-        {Array(daysInMonth).fill(null).map((_, i) => {
-          const d = new Date(year, month, i + 1);
-          const isSelected = selected && d.toDateString() === selected.toDateString();
-          return (
-            <button
-              key={i+1}
-              className={`rounded-md w-8 h-8 flex items-center justify-center transition-colors duration-[120ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${isSelected ? 'bg-brand-500 text-bg-900 hover:bg-brand-600 active:bg-brand-700' : isToday(d) ? 'border border-brand-500 text-brand-500 hover:bg-bg-700 active:bg-bg-600' : 'hover:bg-bg-800 active:bg-bg-700 text-text-100'}`}
-              onClick={() => onChange(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)}
-            >{i+1}</button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 export default function HomePage() {
   const [input, setInput] = useState("");

@@ -44,7 +44,11 @@ export default function RootLayout({
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#1a1d24" />
       </head>
-      <body className={inter.className}>
+      <body 
+        className={inter.className}
+        data-new-gr-c-s-check-loaded=""
+        data-gr-ext-installed=""
+      >
         <ErrorBoundary>
           {children}
         </ErrorBoundary>
